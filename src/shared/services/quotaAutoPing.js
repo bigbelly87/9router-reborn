@@ -10,6 +10,7 @@ import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "@/app/api/usage/[connectionId]/route.js";
 import { QUOTA_AUTOPING_CONFIG } from "@/shared/constants/config";
+import { checkAndAlertStatusTransition } from "@/lib/alerts/telegram";
 
 const C = QUOTA_AUTOPING_CONFIG;
 const CLAUDE_PING_URL = "https://api.anthropic.com/v1/messages?beta=true";
@@ -209,6 +210,9 @@ async function pingConnection(conn, provider, providerConfig, handler, deps, sta
   }
 
   const usage = await handler.getUsage(connection.accessToken, proxyOptions);
+  if (usage) {
+    checkAndAlertStatusTransition(connection, usage).catch(() => {});
+  }
   const quotas = usage?.quotas || {};
   const quota = quotas?.[providerConfig.quotaKey];
   const resetAt = quota?.resetAt;

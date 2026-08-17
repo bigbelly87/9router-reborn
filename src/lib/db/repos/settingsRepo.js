@@ -61,6 +61,21 @@ const DEFAULT_SETTINGS = {
   pxpipeAutoInstall: true,
   pxpipeMinChars: 25000,
   pxpipeTimeoutMs: 15000,
+  telegramAlertsEnabled: false,
+  telegramTitlePrefix: "9Router",
+  telegramBotToken: "",
+  telegramChatId: "",
+  telegramTopicId: "",
+  telegramCooldownMinutes: 5,
+  telegramDailyReportEnabled: false,
+  telegramDailyReportTime: "01:00",
+  telegramEvents: {
+    statusRed: true,
+    statusYellow: true,
+    statusGreen: true,
+    allAccountsDown: true,
+    authRefreshFailed: true,
+  },
 };
 
 async function readRaw() {

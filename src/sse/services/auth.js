@@ -3,6 +3,7 @@ import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/con
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
+import { checkAndAlertStatusTransition } from "@/lib/alerts/telegram";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -260,6 +261,17 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
     console.error(`❌ ${provider} [${status}]: ${reason}`);
   }
 
+  // Trigger Telegram alert if transitioning to RED status
+  if (conn) {
+    const resetAtDate = cooldownMs ? new Date(Date.now() + cooldownMs).toISOString() : null;
+    checkAndAlertStatusTransition(conn, null, {
+      isUnavailable: true,
+      isLocked: true,
+      resetAt: resetAtDate,
+      reason: `[${status}] ${reason}`,
+    }).catch(() => {});
+  }
+
   return { shouldFallback: true, cooldownMs };
 }
 
@@ -311,6 +323,15 @@ export async function clearAccountError(connectionId, currentConnection, model =
   }
 
   await updateProviderConnection(connectionId, clearObj);
+
+  // If recovering from RED back to GREEN
+  if (remainingActiveLocks.length === 0 && (conn.lastStatusColor === "red" || conn.testStatus === "unavailable")) {
+    checkAndAlertStatusTransition({ ...conn, testStatus: "active", lastStatusColor: "red" }, null, {
+      isUnavailable: false,
+      isLocked: false,
+      reason: "Tài khoản đã hoạt động bình thường trở lại.",
+    }).catch(() => {});
+  }
 }
 
 /**

@@ -118,6 +118,11 @@ async function runHeavyStartup() {
   import("@/sse/services/backgroundTokenRefresh.js")
     .then(({ startBackgroundTokenRefresh }) => startBackgroundTokenRefresh())
     .catch((e) => console.log("[BackgroundTokenRefresh] scheduler start failed:", e.message));
+
+  // Telegram Daily Summary Report scheduler (e.g. 01:00 daily)
+  import("@/lib/alerts/telegramDailyReport.js")
+    .then(({ configureDailyReportScheduler }) => configureDailyReportScheduler(settings))
+    .catch((e) => console.log("[TelegramDailyReport] scheduler configure failed:", e.message));
 }
 
 function hasQuotaAutoPingEnabled(settings) {

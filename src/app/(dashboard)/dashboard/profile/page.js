@@ -81,6 +81,29 @@ export default function ProfilePage() {
   const [proxyLoading, setProxyLoading] = useState(false);
   const [proxyTestLoading, setProxyTestLoading] = useState(false);
 
+  // Telegram Alerts State
+  const [telegramForm, setTelegramForm] = useState({
+    telegramAlertsEnabled: false,
+    telegramTitlePrefix: "9Router",
+    telegramBotToken: "",
+    telegramChatId: "",
+    telegramTopicId: "",
+    telegramCooldownMinutes: 5,
+    telegramDailyReportEnabled: false,
+    telegramDailyReportTime: "01:00",
+    telegramEvents: {
+      statusRed: true,
+      statusYellow: true,
+      statusGreen: true,
+      allAccountsDown: true,
+      authRefreshFailed: true,
+    },
+  });
+  const [telegramStatus, setTelegramStatus] = useState({ type: "", message: "" });
+  const [telegramLoading, setTelegramLoading] = useState(false);
+  const [telegramTestLoading, setTelegramTestLoading] = useState(false);
+  const [dailyReportSending, setDailyReportSending] = useState(false);
+
   useEffect(() => {
     fetch("/api/settings")
       .then((res) => res.json())
@@ -115,6 +138,23 @@ export default function ProfilePage() {
           outboundProxyEnabled: data?.outboundProxyEnabled === true,
           outboundProxyUrl: data?.outboundProxyUrl || "",
           outboundNoProxy: data?.outboundNoProxy || "",
+        });
+        setTelegramForm({
+          telegramAlertsEnabled: data?.telegramAlertsEnabled === true,
+          telegramTitlePrefix: data?.telegramTitlePrefix || "9Router",
+          telegramBotToken: data?.telegramBotToken || "",
+          telegramChatId: data?.telegramChatId || "",
+          telegramTopicId: data?.telegramTopicId || "",
+          telegramCooldownMinutes: data?.telegramCooldownMinutes || 5,
+          telegramDailyReportEnabled: data?.telegramDailyReportEnabled === true,
+          telegramDailyReportTime: data?.telegramDailyReportTime || "01:00",
+          telegramEvents: {
+            statusRed: data?.telegramEvents?.statusRed !== false,
+            statusYellow: data?.telegramEvents?.statusYellow !== false,
+            statusGreen: data?.telegramEvents?.statusGreen !== false,
+            allAccountsDown: data?.telegramEvents?.allAccountsDown !== false,
+            authRefreshFailed: data?.telegramEvents?.authRefreshFailed !== false,
+          },
         });
         setLoading(false);
       })
@@ -218,6 +258,129 @@ export default function ProfilePage() {
       setProxyStatus({ type: "error", message: "An error occurred" });
     } finally {
       setProxyLoading(false);
+    }
+  };
+
+  const updateTelegramEnabled = async (enabled) => {
+    setTelegramLoading(true);
+    setTelegramStatus({ type: "", message: "" });
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telegramAlertsEnabled: enabled }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSettings((prev) => ({ ...prev, ...data }));
+        setTelegramForm((prev) => ({ ...prev, telegramAlertsEnabled: enabled }));
+        setTelegramStatus({ type: "success", message: enabled ? "Telegram alerts enabled" : "Telegram alerts disabled" });
+      } else {
+        setTelegramStatus({ type: "error", message: data.error || "Failed to update Telegram settings" });
+      }
+    } catch (err) {
+      setTelegramStatus({ type: "error", message: "An error occurred" });
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const updateTelegramSettings = async (e) => {
+    e.preventDefault();
+    setTelegramLoading(true);
+    setTelegramStatus({ type: "", message: "" });
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegramTitlePrefix: telegramForm.telegramTitlePrefix || "9Router",
+          telegramBotToken: telegramForm.telegramBotToken,
+          telegramChatId: telegramForm.telegramChatId,
+          telegramTopicId: telegramForm.telegramTopicId,
+          telegramCooldownMinutes: Number(telegramForm.telegramCooldownMinutes) || 5,
+          telegramDailyReportEnabled: telegramForm.telegramDailyReportEnabled === true,
+          telegramDailyReportTime: telegramForm.telegramDailyReportTime || "01:00",
+          telegramEvents: telegramForm.telegramEvents,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSettings((prev) => ({ ...prev, ...data }));
+        setTelegramStatus({ type: "success", message: "Telegram settings saved successfully" });
+      } else {
+        setTelegramStatus({ type: "error", message: data.error || "Failed to save Telegram settings" });
+      }
+    } catch (err) {
+      setTelegramStatus({ type: "error", message: "An error occurred" });
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const testTelegramAlert = async () => {
+    const token = (telegramForm.telegramBotToken || "").trim();
+    const chat = (telegramForm.telegramChatId || "").trim();
+    if (!token || !chat) {
+      setTelegramStatus({ type: "error", message: "Please enter Bot Token and Chat ID to test" });
+      return;
+    }
+    setTelegramTestLoading(true);
+    setTelegramStatus({ type: "", message: "" });
+    try {
+      const res = await fetch("/api/alerts/telegram/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          botToken: token,
+          chatId: chat,
+          topicId: telegramForm.telegramTopicId,
+          titlePrefix: telegramForm.telegramTitlePrefix || "9Router",
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.success) {
+        setTelegramStatus({ type: "success", message: "Test message sent successfully! Check your Telegram." });
+      } else {
+        setTelegramStatus({ type: "error", message: data?.error || "Failed to send test message" });
+      }
+    } catch (err) {
+      setTelegramStatus({ type: "error", message: "An error occurred while testing" });
+    } finally {
+      setTelegramTestLoading(false);
+    }
+  };
+
+  const triggerDailyReportNow = async () => {
+    const token = (telegramForm.telegramBotToken || "").trim();
+    const chat = (telegramForm.telegramChatId || "").trim();
+    if (!token || !chat) {
+      setTelegramStatus({ type: "error", message: "Please enter Bot Token and Chat ID first" });
+      return;
+    }
+    setDailyReportSending(true);
+    setTelegramStatus({ type: "", message: "" });
+    try {
+      const res = await fetch("/api/alerts/telegram/daily-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          botToken: token,
+          chatId: chat,
+          topicId: telegramForm.telegramTopicId,
+          titlePrefix: telegramForm.telegramTitlePrefix || "9Router",
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.success) {
+        setTelegramStatus({ type: "success", message: "Báo cáo thống kê ngày hôm trước đã gửi tới Telegram thành công!" });
+      } else {
+        setTelegramStatus({ type: "error", message: data?.error || "Gửi báo cáo thất bại" });
+      }
+    } catch (err) {
+      setTelegramStatus({ type: "error", message: "An error occurred while sending daily report" });
+    } finally {
+      setDailyReportSending(false);
     }
   };
 
@@ -1612,6 +1775,274 @@ export default function ProfilePage() {
               onChange={updateObservabilityEnabled}
               disabled={loading}
             />
+          </div>
+        </Card>
+
+        {/* Telegram Notifications */}
+        <Card>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-sky-500/10 text-sky-500 shrink-0">
+              <span className="material-symbols-outlined text-[20px]">notifications_active</span>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-base sm:text-lg font-semibold">Telegram Alerts</h3>
+              <p className="text-xs text-text-muted">Cảnh báo tức thời khi tài khoản đổi trạng thái Đỏ 🔴, Cam 🟠, Xanh 🟢 hoặc lỗi request</p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex items-start sm:items-center justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm sm:text-base">Enable Telegram Alerts</p>
+                <p className="text-xs sm:text-sm text-text-muted">
+                  Gửi thông báo qua Telegram Bot khi có sự cố hoặc chuyển trạng thái hạn mức
+                </p>
+              </div>
+              <Toggle
+                checked={telegramForm.telegramAlertsEnabled === true}
+                onChange={() => updateTelegramEnabled(!(telegramForm.telegramAlertsEnabled === true))}
+                disabled={loading || telegramLoading}
+              />
+            </div>
+
+            {telegramForm.telegramAlertsEnabled === true && (
+              <form onSubmit={updateTelegramSettings} className="flex flex-col gap-4 pt-2 border-t border-border/50">
+                <div className="flex flex-col gap-2">
+                  <label className="font-medium text-sm sm:text-base flex items-center justify-between">
+                    <span>Tiêu đề thông báo (Title Prefix)</span>
+                  </label>
+                  <Input
+                    placeholder="9Router (hoặc [Server-HN], [Prod-9Router]...)"
+                    value={telegramForm.telegramTitlePrefix}
+                    onChange={(e) => setTelegramForm((prev) => ({ ...prev, telegramTitlePrefix: e.target.value }))}
+                    disabled={loading || telegramLoading}
+                  />
+                  <p className="text-xs sm:text-sm text-text-muted">Tiền tố hiển thị trong tiêu đề tin nhắn Telegram (Mặc định: 9Router).</p>
+                </div>
+
+                <div className="flex flex-col gap-2 pt-2 border-t border-border/50">
+                  <label className="font-medium text-sm sm:text-base flex items-center justify-between">
+                    <span>Bot Token</span>
+                    <a
+                      href="https://t.me/BotFather"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-sky-500 hover:underline inline-flex items-center gap-1 font-normal"
+                    >
+                      Tạo bot qua @BotFather
+                      <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                    </a>
+                  </label>
+                  <Input
+                    type="password"
+                    placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz..."
+                    value={telegramForm.telegramBotToken}
+                    onChange={(e) => setTelegramForm((prev) => ({ ...prev, telegramBotToken: e.target.value }))}
+                    disabled={loading || telegramLoading}
+                  />
+                  <p className="text-xs sm:text-sm text-text-muted">API Token của Telegram Bot do @BotFather cấp.</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-border/50">
+                  <div className="flex flex-col gap-2">
+                    <label className="font-medium text-sm sm:text-base flex items-center justify-between">
+                      <span>Chat ID</span>
+                      <a
+                        href="https://t.me/userinfobot"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-sky-500 hover:underline inline-flex items-center gap-1 font-normal"
+                      >
+                        Lấy ID qua @userinfobot
+                        <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                      </a>
+                    </label>
+                    <Input
+                      placeholder="e.g. 123456789 or -100123456789"
+                      value={telegramForm.telegramChatId}
+                      onChange={(e) => setTelegramForm((prev) => ({ ...prev, telegramChatId: e.target.value }))}
+                      disabled={loading || telegramLoading}
+                    />
+                    <p className="text-xs text-text-muted">ID người nhận, ID Group hoặc ID Channel.</p>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <label className="font-medium text-sm sm:text-base">Topic / Thread ID (Tùy chọn)</label>
+                    <Input
+                      placeholder="e.g. 12345 (để trống nếu không dùng Forum Topic)"
+                      value={telegramForm.telegramTopicId}
+                      onChange={(e) => setTelegramForm((prev) => ({ ...prev, telegramTopicId: e.target.value }))}
+                      disabled={loading || telegramLoading}
+                    />
+                    <p className="text-xs text-text-muted">ID của Topic nếu bạn gửi vào Supergroup dạng Forum.</p>
+                  </div>
+                </div>
+
+                {/* Event Filters */}
+                <div className="flex flex-col gap-3 pt-2 border-t border-border/50">
+                  <p className="font-medium text-sm sm:text-base">Sự kiện nhận cảnh báo</p>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    <label className="flex items-center gap-2 p-2 rounded-lg bg-bg border border-border/60 hover:border-primary/40 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={telegramForm.telegramEvents?.statusRed !== false}
+                        onChange={(e) =>
+                          setTelegramForm((prev) => ({
+                            ...prev,
+                            telegramEvents: { ...prev.telegramEvents, statusRed: e.target.checked },
+                          }))
+                        }
+                        className="size-4 rounded text-primary focus:ring-primary"
+                      />
+                      <span className="flex-1">🔴 Chuyển sang <b>Đỏ</b> (Hết quota / Khóa)</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 p-2 rounded-lg bg-bg border border-border/60 hover:border-primary/40 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={telegramForm.telegramEvents?.statusYellow !== false}
+                        onChange={(e) =>
+                          setTelegramForm((prev) => ({
+                            ...prev,
+                            telegramEvents: { ...prev.telegramEvents, statusYellow: e.target.checked },
+                          }))
+                        }
+                        className="size-4 rounded text-primary focus:ring-primary"
+                      />
+                      <span className="flex-1">🟠 Chuyển sang <b>Cam</b> (Cảnh báo 30-70%)</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 p-2 rounded-lg bg-bg border border-border/60 hover:border-primary/40 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={telegramForm.telegramEvents?.statusGreen !== false}
+                        onChange={(e) =>
+                          setTelegramForm((prev) => ({
+                            ...prev,
+                            telegramEvents: { ...prev.telegramEvents, statusGreen: e.target.checked },
+                          }))
+                        }
+                        className="size-4 rounded text-primary focus:ring-primary"
+                      />
+                      <span className="flex-1">🟢 Chuyển sang <b>Xanh</b> (Hồi phục / Reset)</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 p-2 rounded-lg bg-bg border border-border/60 hover:border-primary/40 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={telegramForm.telegramEvents?.allAccountsDown !== false}
+                        onChange={(e) =>
+                          setTelegramForm((prev) => ({
+                            ...prev,
+                            telegramEvents: { ...prev.telegramEvents, allAccountsDown: e.target.checked },
+                          }))
+                        }
+                        className="size-4 rounded text-primary focus:ring-primary"
+                      />
+                      <span className="flex-1">🚨 <b>Toàn bộ tài khoản sập</b> (All Down)</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 p-2 rounded-lg bg-bg border border-border/60 hover:border-primary/40 cursor-pointer sm:col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={telegramForm.telegramEvents?.authRefreshFailed !== false}
+                        onChange={(e) =>
+                          setTelegramForm((prev) => ({
+                            ...prev,
+                            telegramEvents: { ...prev.telegramEvents, authRefreshFailed: e.target.checked },
+                          }))
+                        }
+                        className="size-4 rounded text-primary focus:ring-primary"
+                      />
+                      <span className="flex-1">🔑 <b>Lỗi Refresh Token OAuth</b> (Cần đăng nhập lại)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Daily Summary Report */}
+                <div className="flex flex-col gap-3 pt-2 border-t border-border/50">
+                  <div className="flex items-start sm:items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-primary text-[18px]">calendar_today</span>
+                        <p className="font-medium text-sm sm:text-base">Báo cáo định kỳ hàng ngày (Daily Summary Report)</p>
+                      </div>
+                      <p className="text-xs sm:text-sm text-text-muted mt-0.5">
+                        Tự động gửi thống kê Total Requests, Total Input Tokens, Cached Tokens, Output Tokens, Est. Cost của ngày hôm trước vào Telegram.
+                      </p>
+                    </div>
+                    <Toggle
+                      checked={telegramForm.telegramDailyReportEnabled === true}
+                      onChange={() =>
+                        setTelegramForm((prev) => ({
+                          ...prev,
+                          telegramDailyReportEnabled: !prev.telegramDailyReportEnabled,
+                        }))
+                      }
+                      disabled={loading || telegramLoading}
+                    />
+                  </div>
+
+                  {telegramForm.telegramDailyReportEnabled === true && (
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3 p-3 rounded-lg bg-bg/50 border border-border/60">
+                      <div className="flex-1 flex flex-col gap-1.5">
+                        <label className="text-xs sm:text-sm font-medium">Giờ gửi báo cáo mỗi ngày (HH:mm)</label>
+                        <Input
+                          type="time"
+                          value={telegramForm.telegramDailyReportTime}
+                          onChange={(e) =>
+                            setTelegramForm((prev) => ({ ...prev, telegramDailyReportTime: e.target.value }))
+                          }
+                          disabled={loading || telegramLoading}
+                          className="w-full sm:w-48"
+                        />
+                        <p className="text-xs text-text-muted">Mặc định: 01:00 sáng hàng ngày.</p>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        loading={dailyReportSending}
+                        disabled={loading || telegramLoading || dailyReportSending}
+                        onClick={triggerDailyReportNow}
+                        icon="analytics"
+                        className="w-full sm:w-auto shrink-0"
+                      >
+                        Gửi báo cáo hôm qua ngay
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-border/50 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    loading={telegramTestLoading}
+                    disabled={loading || telegramLoading}
+                    onClick={testTelegramAlert}
+                    className="w-full sm:w-auto"
+                    icon="send"
+                  >
+                    Test Telegram Connection
+                  </Button>
+                  <Button type="submit" variant="primary" loading={telegramLoading} className="w-full sm:w-auto">
+                    Save Telegram Settings
+                  </Button>
+                </div>
+              </form>
+            )}
+
+            {telegramStatus.message && (
+              <p
+                className={`text-xs sm:text-sm ${
+                  telegramStatus.type === "error" ? "text-red-500" : "text-green-500"
+                } pt-2 border-t border-border/50`}
+              >
+                {telegramStatus.message}
+              </p>
+            )}
           </div>
         </Card>
 
