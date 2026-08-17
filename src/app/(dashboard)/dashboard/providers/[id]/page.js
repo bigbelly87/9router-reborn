@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -40,6 +40,7 @@ export default function ProviderDetailPage() {
   const providerId = params.id;
   const { getCaps } = useModelCaps();
   const [connections, setConnections] = useState([]);
+  const [connectionSearchQuery, setConnectionSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [providerNode, setProviderNode] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
@@ -842,7 +843,43 @@ export default function ProviderDetailPage() {
     }
   };
 
+  const filteredConnections = useMemo(() => {
+    if (!connectionSearchQuery.trim()) return connections;
+    const q = connectionSearchQuery.trim().toLowerCase();
+    const proxyPoolMap = new Map((proxyPools || []).map((p) => [p.id, p]));
+    return connections.filter((conn, idx) => {
+      const name = (conn.name || "").toLowerCase();
+      const email = (conn.email || "").toLowerCase();
+      const displayName = (conn.displayName || "").toLowerCase();
+      const id = (conn.id || "").toLowerCase();
+      const authType = (conn.authType || "").toLowerCase();
+      const priorityStr = conn.priority != null ? String(conn.priority) : "";
+      const indexStr = `#${conn.priority != null ? conn.priority : idx + 1}`;
+      const poolName = conn.providerSpecificData?.proxyPoolId
+        ? (proxyPoolMap.get(conn.providerSpecificData.proxyPoolId)?.name || "").toLowerCase()
+        : "";
+      const proxyUrl = (conn.providerSpecificData?.connectionProxyUrl || "").toLowerCase();
+      const statusStr = conn.isActive === false ? "disabled inactive" : "active enabled";
+      const lastError = (conn.lastError || "").toLowerCase();
+
+      return (
+        name.includes(q) ||
+        email.includes(q) ||
+        displayName.includes(q) ||
+        id.includes(q) ||
+        authType.includes(q) ||
+        priorityStr === q ||
+        indexStr.toLowerCase().includes(q) ||
+        poolName.includes(q) ||
+        proxyUrl.includes(q) ||
+        statusStr.includes(q) ||
+        lastError.includes(q)
+      );
+    });
+  }, [connections, connectionSearchQuery, proxyPools]);
+
   const selectedConnections = connections.filter((conn) => selectedConnectionIds.includes(conn.id));
+  const allFilteredSelected = filteredConnections.length > 0 && filteredConnections.every((conn) => selectedConnectionIds.includes(conn.id));
   const allSelected = connections.length > 0 && selectedConnectionIds.length === connections.length;
 
   const toggleSelectConnection = (connectionId) => {
@@ -854,11 +891,13 @@ export default function ProviderDetailPage() {
   };
 
   const toggleSelectAllConnections = () => {
-    if (allSelected) {
-      setSelectedConnectionIds([]);
+    if (allFilteredSelected) {
+      const filteredIds = new Set(filteredConnections.map((conn) => conn.id));
+      setSelectedConnectionIds((prev) => prev.filter((id) => !filteredIds.has(id)));
       return;
     }
-    setSelectedConnectionIds(connections.map((conn) => conn.id));
+    const filteredIds = filteredConnections.map((conn) => conn.id);
+    setSelectedConnectionIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
   };
 
   const clearSelection = () => {
@@ -942,60 +981,63 @@ export default function ProviderDetailPage() {
 
   const connectionsList = (
     <div className="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03]">
-      {connections
-        .map((conn, index) => (
-          <div key={conn.id} className="flex min-w-0 items-stretch">
-            <div className="flex shrink-0 items-center pl-1 sm:pl-2">
-              <input
-                type="checkbox"
-                checked={isSelected(conn.id)}
-                onChange={() => toggleSelectConnection(conn.id)}
-                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-              />
-            </div>
-            <div className="flex-1 min-w-0">
-              <ConnectionRow
-                connection={conn}
-                proxyPools={proxyPools}
-                isOAuth={isOAuth}
-                isFirst={index === 0}
-                isLast={index === connections.length - 1}
-                onMoveUp={() => handleSwapPriority(index, index - 1)}
-                onMoveDown={() => handleSwapPriority(index, index + 1)}
-                onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
-                autoPing={AUTO_PING_SETTINGS_KEYS[providerId] && conn.authType === "oauth" ? {
-                  on: autoPing.connections[conn.id] === true,
-                  onToggle: (on) => handleAutoPingConnection(conn.id, on),
-                  provider: providerId,
-                } : null}
-                onUpdateProxy={async (proxyPoolId) => {
-                  try {
-                    const res = await fetch(`/api/providers/${conn.id}`, {
-                      method: "PUT",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ proxyPoolId: proxyPoolId || null }),
-                    });
-                    if (res.ok) {
-                      setConnections(prev => prev.map(c =>
-                        c.id === conn.id
-                          ? { ...c, providerSpecificData: { ...c.providerSpecificData, proxyPoolId: proxyPoolId || null } }
-                          : c
-                      ));
+      {filteredConnections
+        .map((conn) => {
+          const index = connections.findIndex((c) => c.id === conn.id);
+          return (
+            <div key={conn.id} className="flex min-w-0 items-stretch">
+              <div className="flex shrink-0 items-center pl-1 sm:pl-2">
+                <input
+                  type="checkbox"
+                  checked={isSelected(conn.id)}
+                  onChange={() => toggleSelectConnection(conn.id)}
+                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <ConnectionRow
+                  connection={conn}
+                  proxyPools={proxyPools}
+                  isOAuth={isOAuth}
+                  isFirst={index === 0}
+                  isLast={index === connections.length - 1}
+                  onMoveUp={() => handleSwapPriority(index, index - 1)}
+                  onMoveDown={() => handleSwapPriority(index, index + 1)}
+                  onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
+                  autoPing={AUTO_PING_SETTINGS_KEYS[providerId] && conn.authType === "oauth" ? {
+                    on: autoPing.connections[conn.id] === true,
+                    onToggle: (on) => handleAutoPingConnection(conn.id, on),
+                    provider: providerId,
+                  } : null}
+                  onUpdateProxy={async (proxyPoolId) => {
+                    try {
+                      const res = await fetch(`/api/providers/${conn.id}`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ proxyPoolId: proxyPoolId || null }),
+                      });
+                      if (res.ok) {
+                        setConnections(prev => prev.map(c =>
+                          c.id === conn.id
+                            ? { ...c, providerSpecificData: { ...c.providerSpecificData, proxyPoolId: proxyPoolId || null } }
+                            : c
+                        ));
+                      }
+                    } catch (error) {
+                      console.log("Error updating proxy:", error);
                     }
-                  } catch (error) {
-                    console.log("Error updating proxy:", error);
-                  }
-                }}
-                onEdit={() => {
-                  setSelectedConnection(conn);
-                  setShowEditModal(true);
-                }}
-                onDelete={() => handleDelete(conn.id)}
-                oneByOneStatus={oneByOneResults[conn.id] || null}
-              />
+                  }}
+                  onEdit={() => {
+                    setSelectedConnection(conn);
+                    setShowEditModal(true);
+                  }}
+                  onDelete={() => handleDelete(conn.id)}
+                  oneByOneStatus={oneByOneResults[conn.id] || null}
+                />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
     </div>
   );
 
@@ -1559,19 +1601,63 @@ export default function ProviderDetailPage() {
                 </div>
               )}
               {connections.length > 0 && (
-                <div className="mb-3 flex items-center gap-2 border-b border-black/[0.03] pb-2 dark:border-white/[0.03]">
-                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-text-muted hover:text-primary">
+                <div className="mb-3 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between border-b border-black/[0.03] pb-2.5 dark:border-white/[0.03]">
+                  <div className="flex items-center gap-3">
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs text-text-muted hover:text-primary">
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={toggleSelectAllConnections}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                      />
+                      Select All {connectionSearchQuery.trim() ? `(${filteredConnections.length})` : ""}
+                    </label>
+                    {connectionSearchQuery.trim() && (
+                      <span className="text-xs text-text-muted">
+                        Showing {filteredConnections.length} of {connections.length}
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative w-full sm:w-64">
+                    <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-text-muted pointer-events-none">
+                      search
+                    </span>
                     <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={toggleSelectAllConnections}
-                      className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                      type="text"
+                      value={connectionSearchQuery}
+                      onChange={(e) => setConnectionSearchQuery(e.target.value)}
+                      placeholder="Search accounts..."
+                      className="h-8 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
-                    Select All
-                  </label>
+                    {connectionSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setConnectionSearchQuery("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">close</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
-              {connectionsList}
+              {filteredConnections.length === 0 ? (
+                <div className="py-8 text-center text-sm text-text-muted">
+                  <span className="material-symbols-outlined mb-1 block text-2xl">search_off</span>
+                  No connections matching &ldquo;{connectionSearchQuery}&rdquo;
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => setConnectionSearchQuery("")}
+                      className="text-xs text-primary hover:underline font-medium"
+                    >
+                      Clear search
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                connectionsList
+              )}
               {!isCompatible && (
                 <div className="mt-4 grid grid-cols-1 gap-2 sm:flex">
                   {providerId === "iflow" && (

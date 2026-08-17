@@ -12,8 +12,9 @@ function isLLMProvider(id) {
 }
 import Badge from "./Badge";
 import Card from "./Card";
+import TimeRangeSelector from "@/app/(dashboard)/dashboard/usage/components/TimeRangeSelector";
 import OverviewCards from "@/app/(dashboard)/dashboard/usage/components/OverviewCards";
-import UsageTable, { fmt, fmtTime } from "@/app/(dashboard)/dashboard/usage/components/UsageTable";
+import UsageTable, { fmt, fmtTime, fmtCost } from "@/app/(dashboard)/dashboard/usage/components/UsageTable";
 import dynamic from "next/dynamic";
 // Lazy-load: keeps @xyflow/react out of the shared bundle until topology renders
 const ProviderTopology = dynamic(() => import("@/app/(dashboard)/dashboard/usage/components/ProviderTopology"), { ssr: false });
@@ -89,18 +90,17 @@ function RecentRequests({ requests = [] }) {
 function sortData(dataMap, pendingMap = {}, sortBy, sortOrder) {
   return Object.entries(dataMap || {})
     .map(([key, data]) => {
-      const totalTokens = (data.promptTokens || 0) + (data.completionTokens || 0);
-      const totalCost = data.cost || 0;
-      // ponytail: cost split is a token-share allocation of the (rate-accurate)
-      // server total, not a per-rate recompute. cached is a subset of prompt, so
-      // peel it out of the input share. Upgrade to a stored per-component cost
-      // breakdown if exact cached-rate cost display is needed.
+      const promptTokens = data.promptTokens || 0;
+      const completionTokens = data.completionTokens || 0;
       const cachedTokens = data.cachedTokens || 0;
-      const nonCachedInput = Math.max(0, (data.promptTokens || 0) - cachedTokens);
+      const totalTokens = promptTokens + completionTokens;
+      const totalCost = data.cost || 0;
+      
+      const nonCachedInput = Math.max(0, promptTokens - cachedTokens);
       const inputCost = totalTokens > 0 ? nonCachedInput * (totalCost / totalTokens) : 0;
       const cachedCost = totalTokens > 0 ? cachedTokens * (totalCost / totalTokens) : 0;
-      const outputCost = totalTokens > 0 ? (data.completionTokens || 0) * (totalCost / totalTokens) : 0;
-      return { ...data, key, totalTokens, totalCost, inputCost, cachedCost, outputCost, pending: pendingMap[key] || 0 };
+      const outputCost = totalTokens > 0 ? completionTokens * (totalCost / totalTokens) : 0;
+      return { ...data, key, promptTokens, completionTokens, cachedTokens, totalTokens, totalCost, inputCost, cachedCost, outputCost, pending: pendingMap[key] || 0 };
     })
     .sort((a, b) => {
       let valA = a[sortBy];
@@ -162,9 +162,9 @@ const MODEL_COLUMNS = [
 ];
 
 const ACCOUNT_COLUMNS = [
+  { field: "accountName", label: "Account" },
   { field: "rawModel", label: "Model" },
   { field: "provider", label: "Provider" },
-  { field: "accountName", label: "Account" },
   { field: "requests", label: "Requests", align: "right" },
   { field: "lastUsed", label: "Last Used", align: "right" },
 ];
@@ -192,15 +192,14 @@ const TABLE_OPTIONS = [
   { value: "endpoint", label: "Usage by Endpoint" },
 ];
 
-const PERIODS = [
-  { value: "today", label: "Today" },
-  { value: "24h", label: "24h" },
-  { value: "7d", label: "7D" },
-  { value: "30d", label: "30D" },
-  { value: "60d", label: "60D" },
-];
-
-export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false } = {}) {
+export default function UsageStats({
+  period: periodProp,
+  setPeriod: setPeriodProp,
+  startDate: startDateProp,
+  endDate: endDateProp,
+  hidePeriodSelector = false,
+  onTimeRangeChange,
+} = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -211,23 +210,27 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [tableView, setTableView] = useState("model");
-  const [viewMode, setViewMode] = useState("costs");
+  const [viewMode, setViewMode] = useState("tokens");
+  const [searchQuery, setSearchQuery] = useState("");
   const [providers, setProviders] = useState([]);
   const [periodLocal, setPeriodLocal] = useState("today");
+  const [startDateLocal, setStartDateLocal] = useState("");
+  const [endDateLocal, setEndDateLocal] = useState("");
+
   const isInitialLoad = useRef(true);
   const hasLoadedStats = useRef(false);
-  const period = periodProp ?? periodLocal;
-  const setPeriod = setPeriodProp ?? setPeriodLocal;
 
-  // Fetch connected providers once, deduplicate by provider type
-  // Always include noAuth free providers (e.g. opencode) regardless of connections
+  const period = periodProp ?? periodLocal;
+  const startDate = startDateProp ?? startDateLocal;
+  const endDate = endDateProp ?? endDateLocal;
+
+  // Fetch connected providers once
   useEffect(() => {
     Promise.all([
       fetch("/api/providers").then((r) => r.ok ? r.json() : null),
       fetch("/api/provider-nodes").then((r) => r.ok ? r.json() : null),
     ])
       .then(([d, nodesData]) => {
-        // Build node name lookup for custom providers
         const nodeNameMap = {};
         for (const node of (nodesData?.nodes || [])) {
           nodeNameMap[node.id] = node.name;
@@ -251,9 +254,8 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       .catch(() => {});
   }, []);
 
-  // Fetch filtered stats via REST when period changes
+  // Fetch filtered stats via REST when period / startDate / endDate changes
   useEffect(() => {
-    // First load: show full spinner; subsequent: show subtle fetching indicator
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
       setLoading(true);
@@ -261,12 +263,18 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       setFetching(true);
     }
 
-    fetch(`/api/usage/stats?period=${period}`)
+    const params = new URLSearchParams();
+    params.set("period", period);
+    if (startDate) params.set("startDate", startDate);
+    if (endDate) params.set("endDate", endDate);
+
+    fetch(`/api/usage/stats?${params.toString()}`)
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        if (data) {
+        if (data && !data.error) {
           hasLoadedStats.current = true;
-          setStats((prev) => ({ ...prev, ...data }));
+          // Set new stats cleanly, avoiding stale state merge
+          setStats(data);
         }
       })
       .catch(() => {})
@@ -274,7 +282,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         setLoading(false);
         setFetching(false);
       });
-  }, [period]);
+  }, [period, startDate, endDate]);
 
   // SSE connection - real-time updates for activeRequests + recentRequests only
   useEffect(() => {
@@ -283,7 +291,6 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
-        // Always merge only real-time fields, never overwrite full stats from REST
         setStats((prev) => {
           if (!prev) return prev;
           return {
@@ -305,6 +312,17 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
     return () => es.close();
   }, []);
 
+  const handleTimeRangeChange = ({ period: p, startDate: s, endDate: e }) => {
+    if (onTimeRangeChange) {
+      onTimeRangeChange({ period: p, startDate: s, endDate: e });
+    } else {
+      if (setPeriodProp) setPeriodProp(p);
+      else setPeriodLocal(p);
+      setStartDateLocal(s);
+      setEndDateLocal(e);
+    }
+  };
+
   const toggleSort = useCallback((tableType, field) => {
     const params = new URLSearchParams(searchParams.toString());
     if (params.get("sortBy") === field) {
@@ -316,33 +334,36 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
     router.replace(`?${params.toString()}`, { scroll: false });
   }, [searchParams, router]);
 
-  // Compute active table data
+  // Compute active table data with search filter applied
   const activeTableConfig = useMemo(() => {
     if (!stats) return null;
+
+    let baseConfig = null;
     switch (tableView) {
       case "model": {
         const pendingMap = stats.pending?.byModel || {};
-        return {
+        baseConfig = {
           columns: MODEL_COLUMNS,
           groupedData: groupDataByKey(sortData(stats.byModel, pendingMap, sortBy, sortOrder), "rawModel"),
           storageKey: "usage-stats:expanded-models",
-          emptyMessage: "No usage recorded yet.",
+          emptyMessage: "No model usage recorded yet.",
           renderSummaryCells: (group) => (
             <>
               <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
+              <td className="px-6 py-3 text-right font-mono text-xs">{fmt(group.summary.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap text-xs">{fmtTime(group.summary.lastUsed)}</td>
             </>
           ),
           renderDetailCells: (item) => (
             <>
               <td className={`px-6 py-3 font-medium transition-colors ${item.pending > 0 ? "text-primary" : ""}`}>{item.rawModel}</td>
               <td className="px-6 py-3"><Badge variant={item.pending > 0 ? "primary" : "neutral"} size="sm">{item.provider}</Badge></td>
-              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
+              <td className="px-6 py-3 text-right font-mono text-xs">{fmt(item.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap text-xs">{fmtTime(item.lastUsed)}</td>
             </>
           ),
         };
+        break;
       }
       case "account": {
         const pendingMap = {};
@@ -355,17 +376,17 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
             }
           });
         }
-        return {
+        baseConfig = {
           columns: ACCOUNT_COLUMNS,
           groupedData: groupDataByKey(sortData(stats.byAccount, pendingMap, sortBy, sortOrder), "accountName"),
           storageKey: "usage-stats:expanded-accounts",
-          emptyMessage: "No account-specific usage recorded yet.",
+          emptyMessage: "No account usage recorded yet.",
           renderSummaryCells: (group) => (
             <>
               <td className="px-6 py-3 text-text-muted">—</td>
               <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
+              <td className="px-6 py-3 text-right font-mono text-xs">{fmt(group.summary.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap text-xs">{fmtTime(group.summary.lastUsed)}</td>
             </>
           ),
           renderDetailCells: (item) => (
@@ -373,14 +394,15 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
               <td className={`px-6 py-3 font-medium transition-colors ${item.pending > 0 ? "text-primary" : ""}`}>{item.accountName || `Account ${item.connectionId?.slice(0, 8)}...`}</td>
               <td className={`px-6 py-3 font-medium transition-colors ${item.pending > 0 ? "text-primary" : ""}`}>{item.rawModel}</td>
               <td className="px-6 py-3"><Badge variant={item.pending > 0 ? "primary" : "neutral"} size="sm">{item.provider}</Badge></td>
-              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
+              <td className="px-6 py-3 text-right font-mono text-xs">{fmt(item.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap text-xs">{fmtTime(item.lastUsed)}</td>
             </>
           ),
         };
+        break;
       }
       case "apiKey": {
-        return {
+        baseConfig = {
           columns: API_KEY_COLUMNS,
           groupedData: groupDataByKey(sortData(stats.byApiKey, {}, sortBy, sortOrder), "keyName"),
           storageKey: "usage-stats:expanded-apikeys",
@@ -389,8 +411,8 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
             <>
               <td className="px-6 py-3 text-text-muted">—</td>
               <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
+              <td className="px-6 py-3 text-right font-mono text-xs">{fmt(group.summary.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap text-xs">{fmtTime(group.summary.lastUsed)}</td>
             </>
           ),
           renderDetailCells: (item) => (
@@ -398,15 +420,16 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
               <td className="px-6 py-3 font-medium">{item.keyName}</td>
               <td className="px-6 py-3">{item.rawModel}</td>
               <td className="px-6 py-3"><Badge variant="neutral" size="sm">{item.provider}</Badge></td>
-              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
+              <td className="px-6 py-3 text-right font-mono text-xs">{fmt(item.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap text-xs">{fmtTime(item.lastUsed)}</td>
             </>
           ),
         };
+        break;
       }
       case "endpoint":
       default: {
-        return {
+        baseConfig = {
           columns: ENDPOINT_COLUMNS,
           groupedData: groupDataByKey(sortData(stats.byEndpoint, {}, sortBy, sortOrder), "endpoint"),
           storageKey: "usage-stats:expanded-endpoints",
@@ -415,23 +438,90 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
             <>
               <td className="px-6 py-3 text-text-muted">—</td>
               <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
+              <td className="px-6 py-3 text-right font-mono text-xs">{fmt(group.summary.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap text-xs">{fmtTime(group.summary.lastUsed)}</td>
             </>
           ),
           renderDetailCells: (item) => (
             <>
-              <td className="px-6 py-3 font-medium font-mono text-sm">{item.endpoint}</td>
+              <td className="px-6 py-3 font-medium font-mono text-xs">{item.endpoint}</td>
               <td className="px-6 py-3">{item.rawModel}</td>
               <td className="px-6 py-3"><Badge variant="neutral" size="sm">{item.provider}</Badge></td>
-              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
+              <td className="px-6 py-3 text-right font-mono text-xs">{fmt(item.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap text-xs">{fmtTime(item.lastUsed)}</td>
             </>
           ),
         };
+        break;
       }
     }
-  }, [stats, tableView, sortBy, sortOrder]);
+
+    if (!baseConfig) return null;
+
+    // Apply client-side search query
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      const filteredGroups = baseConfig.groupedData.filter((g) => {
+        if (g.groupKey.toLowerCase().includes(q)) return true;
+        return g.items.some(
+          (it) =>
+            (it.rawModel && it.rawModel.toLowerCase().includes(q)) ||
+            (it.provider && it.provider.toLowerCase().includes(q)) ||
+            (it.accountName && it.accountName.toLowerCase().includes(q)) ||
+            (it.keyName && it.keyName.toLowerCase().includes(q)) ||
+            (it.endpoint && it.endpoint.toLowerCase().includes(q))
+        );
+      });
+      return { ...baseConfig, groupedData: filteredGroups };
+    }
+
+    return baseConfig;
+  }, [stats, tableView, sortBy, sortOrder, searchQuery]);
+
+  // Export CSV handler
+  const handleExportCsv = () => {
+    if (!activeTableConfig?.groupedData) return;
+    const rows = [
+      ["Group", "Model", "Provider", "Requests", "Input Tokens", "Cached Tokens", "Output Tokens", "Total Tokens", "Total Cost ($)", "Last Used"],
+    ];
+    activeTableConfig.groupedData.forEach((g) => {
+      rows.push([
+        g.groupKey,
+        "—",
+        "—",
+        g.summary.requests,
+        g.summary.promptTokens,
+        g.summary.cachedTokens,
+        g.summary.completionTokens,
+        g.summary.totalTokens,
+        g.summary.cost.toFixed(4),
+        g.summary.lastUsed || "",
+      ]);
+      g.items.forEach((it) => {
+        rows.push([
+          `  ↳ ${g.groupKey}`,
+          it.rawModel || "",
+          it.provider || "",
+          it.requests,
+          it.promptTokens,
+          it.cachedTokens,
+          it.completionTokens,
+          it.totalTokens,
+          (it.cost || 0).toFixed(4),
+          it.lastUsed || "",
+        ]);
+      });
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8," + rows.map((e) => e.map((c) => `"${c}"`).join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `usage_${tableView}_${period}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   if (!stats && !loading) return <div className="text-text-muted">Failed to load usage statistics.</div>;
 
@@ -443,25 +533,15 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      {/* Period selector (hidden when controlled by parent) */}
+      {/* Time Range Selector (when not controlled by parent) */}
       {!hidePeriodSelector && (
-        <div className="flex w-full items-center gap-2 sm:w-auto sm:self-end">
-          <div className="grid flex-1 grid-cols-5 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
-            {PERIODS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setPeriod(p.value)}
-                disabled={fetching}
-                className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${period === p.value ? "bg-primary text-white shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"}`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {fetching && (
-            <span className="material-symbols-outlined text-[16px] text-text-muted animate-spin">progress_activity</span>
-          )}
-        </div>
+        <TimeRangeSelector
+          period={period}
+          startDate={startDate}
+          endDate={endDate}
+          onChange={handleTimeRangeChange}
+          disabled={fetching}
+        />
       )}
 
       {/* Overview cards */}
@@ -480,37 +560,81 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         </div>
       )}
 
-      {/* Token / Cost chart - sync period */}
-      {loading ? spinner : <UsageChart period={period} />}
+      {/* Token / Cost chart - sync period & custom range */}
+      {loading ? spinner : <UsageChart period={period} startDate={startDate} endDate={endDate} />}
 
-      {/* Table with dropdown selector */}
+      {/* Table with controls bar */}
       <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <select
-            value={tableView}
-            onChange={(e) => setTableView(e.target.value)}
-            className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
-            style={{ colorScheme: 'auto' }}
-          >
-            {TABLE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          <div className="grid grid-cols-2 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex">
-            <button
-              onClick={() => setViewMode("costs")}
-              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${viewMode === "costs" ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* View Table Type dropdown */}
+            <select
+              value={tableView}
+              onChange={(e) => setTableView(e.target.value)}
+              className="h-9 rounded-lg border border-border bg-surface px-3 text-xs font-semibold text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20"
+              style={{ colorScheme: 'auto' }}
             >
-              Costs
-            </button>
+              {TABLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+
+            {/* Instant search input */}
+            <div className="relative flex-1 sm:w-60">
+              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-text-muted pointer-events-none">
+                search
+              </span>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search model, account, key..."
+                className="h-9 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                >
+                  <span className="material-symbols-outlined text-[14px]">close</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Costs / Tokens toggle */}
+            <div className="grid grid-cols-2 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1">
+              <button
+                type="button"
+                onClick={() => setViewMode("tokens")}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${viewMode === "tokens" ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
+              >
+                Tokens
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("costs")}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${viewMode === "costs" ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
+              >
+                Costs
+              </button>
+            </div>
+
+            {/* Export CSV button */}
             <button
-              onClick={() => setViewMode("tokens")}
-              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${viewMode === "tokens" ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
+              type="button"
+              onClick={handleExportCsv}
+              title="Export filtered table data as CSV"
+              className="flex h-9 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-semibold text-text-muted hover:border-primary/40 hover:bg-primary/5 hover:text-primary transition-all"
             >
-              Tokens
+              <span className="material-symbols-outlined text-[16px]">download</span>
+              <span className="hidden sm:inline">Export CSV</span>
             </button>
           </div>
         </div>
+
         {loading ? spinner : activeTableConfig && (
           <UsageTable
             title=""

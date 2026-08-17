@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
 import { Card, Badge, Button, Modal, Select, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
@@ -297,6 +297,7 @@ AddApiKeyModal.propTypes = {
 // Self-contained card: fetches, displays and manages all connections for a provider.
 export default function ConnectionsCard({ providerId, isOAuth }) {
   const [connections, setConnections] = useState([]);
+  const [connectionSearchQuery, setConnectionSearchQuery] = useState("");
   const [proxyPools, setProxyPools] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -396,6 +397,41 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
     } catch (e) { console.log("update connection error:", e); }
   };
 
+  const filteredConnections = useMemo(() => {
+    if (!connectionSearchQuery.trim()) return connections;
+    const q = connectionSearchQuery.trim().toLowerCase();
+    const proxyPoolMap = new Map((proxyPools || []).map((p) => [p.id, p]));
+    return connections.filter((conn, idx) => {
+      const name = (conn.name || "").toLowerCase();
+      const email = (conn.email || "").toLowerCase();
+      const displayName = (conn.displayName || "").toLowerCase();
+      const id = (conn.id || "").toLowerCase();
+      const authType = (conn.authType || "").toLowerCase();
+      const priorityStr = conn.priority != null ? String(conn.priority) : "";
+      const indexStr = `#${conn.priority != null ? conn.priority : idx + 1}`;
+      const poolName = conn.providerSpecificData?.proxyPoolId
+        ? (proxyPoolMap.get(conn.providerSpecificData.proxyPoolId)?.name || "").toLowerCase()
+        : "";
+      const proxyUrl = (conn.providerSpecificData?.connectionProxyUrl || "").toLowerCase();
+      const statusStr = conn.isActive === false ? "disabled inactive" : "active enabled";
+      const lastError = (conn.lastError || "").toLowerCase();
+
+      return (
+        name.includes(q) ||
+        email.includes(q) ||
+        displayName.includes(q) ||
+        id.includes(q) ||
+        authType.includes(q) ||
+        priorityStr === q ||
+        indexStr.toLowerCase().includes(q) ||
+        poolName.includes(q) ||
+        proxyUrl.includes(q) ||
+        statusStr.includes(q) ||
+        lastError.includes(q)
+      );
+    });
+  }, [connections, connectionSearchQuery, proxyPools]);
+
   if (loading) return <Card><div className="h-20 animate-pulse bg-black/5 rounded-lg" /></Card>;
 
   return (
@@ -434,24 +470,72 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
           </div>
         ) : (
           <>
-            <div className="flex flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03]">
-              {connections.map((conn, idx) => (
-                <ConnectionRow
-                  key={conn.id}
-                  connection={conn}
-                  proxyPools={proxyPools}
-                  isOAuth={isOAuth}
-                  isFirst={idx === 0}
-                  isLast={idx === connections.length - 1}
-                  onMoveUp={() => handleSwapPriority(idx, idx - 1)}
-                  onMoveDown={() => handleSwapPriority(idx, idx + 1)}
-                  onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
-                  onUpdateProxy={(poolId) => handleUpdateProxy(conn.id, poolId)}
-                  onEdit={() => { setSelectedConnection(conn); setShowEditModal(true); }}
-                  onDelete={() => handleDelete(conn.id)}
+            <div className="mb-3 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between border-b border-black/[0.03] pb-2.5 dark:border-white/[0.03]">
+              <span className="text-xs text-text-muted">
+                {connectionSearchQuery.trim()
+                  ? `Showing ${filteredConnections.length} of ${connections.length} connection${connections.length === 1 ? "" : "s"}`
+                  : `${connections.length} connection${connections.length === 1 ? "" : "s"}`}
+              </span>
+              <div className="relative w-full sm:w-64">
+                <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-text-muted pointer-events-none">
+                  search
+                </span>
+                <input
+                  type="text"
+                  value={connectionSearchQuery}
+                  onChange={(e) => setConnectionSearchQuery(e.target.value)}
+                  placeholder="Search accounts..."
+                  className="h-8 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
-              ))}
+                {connectionSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setConnectionSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">close</span>
+                  </button>
+                )}
+              </div>
             </div>
+
+            {filteredConnections.length === 0 ? (
+              <div className="py-8 text-center text-sm text-text-muted">
+                <span className="material-symbols-outlined mb-1 block text-2xl">search_off</span>
+                No connections matching &ldquo;{connectionSearchQuery}&rdquo;
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setConnectionSearchQuery("")}
+                    className="text-xs text-primary hover:underline font-medium"
+                  >
+                    Clear search
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03]">
+                {filteredConnections.map((conn) => {
+                  const idx = connections.findIndex((c) => c.id === conn.id);
+                  return (
+                    <ConnectionRow
+                      key={conn.id}
+                      connection={conn}
+                      proxyPools={proxyPools}
+                      isOAuth={isOAuth}
+                      isFirst={idx === 0}
+                      isLast={idx === connections.length - 1}
+                      onMoveUp={() => handleSwapPriority(idx, idx - 1)}
+                      onMoveDown={() => handleSwapPriority(idx, idx + 1)}
+                      onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
+                      onUpdateProxy={(poolId) => handleUpdateProxy(conn.id, poolId)}
+                      onEdit={() => { setSelectedConnection(conn); setShowEditModal(true); }}
+                      onDelete={() => handleDelete(conn.id)}
+                    />
+                  );
+                })}
+              </div>
+            )}
             <div className="mt-4 flex justify-stretch sm:justify-start">
               <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>Add</Button>
             </div>

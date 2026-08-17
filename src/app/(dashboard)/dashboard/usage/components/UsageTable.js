@@ -33,36 +33,59 @@ SortIcon.propTypes = {
  */
 function ValueCells({ item, viewMode, isSummary = false }) {
   if (viewMode === "tokens") {
+    const prompt = item.promptTokens;
+    const cached = item.cachedTokens;
+    const comp = item.completionTokens;
+    const total = item.totalTokens ?? ((prompt || 0) + (comp || 0));
+
     return (
       <>
-        <td className="px-6 py-3 text-right text-text-muted">
-          {isSummary && item.promptTokens === undefined ? "—" : fmt(item.promptTokens)}
+        <td className="px-6 py-3 text-right font-mono text-xs">
+          {isSummary && prompt === undefined ? (
+            <span className="text-text-muted">—</span>
+          ) : (
+            <span className="text-primary font-medium">{fmt(prompt)}</span>
+          )}
         </td>
-        <td className="px-6 py-3 text-right text-text-muted">
-          {item.cachedTokens ? fmt(item.cachedTokens) : "—"}
+        <td className="px-6 py-3 text-right font-mono text-xs">
+          {cached ? (
+            <span className="text-info font-medium">{fmt(cached)}</span>
+          ) : (
+            <span className="text-text-muted">—</span>
+          )}
         </td>
-        <td className="px-6 py-3 text-right text-text-muted">
-          {isSummary && item.completionTokens === undefined ? "—" : fmt(item.completionTokens)}
+        <td className="px-6 py-3 text-right font-mono text-xs">
+          {isSummary && comp === undefined ? (
+            <span className="text-text-muted">—</span>
+          ) : (
+            <span className="text-success font-medium">{fmt(comp)}</span>
+          )}
         </td>
-        <td className="px-6 py-3 text-right font-medium">
-          {fmt(item.totalTokens)}
+        <td className="px-6 py-3 text-right font-mono text-xs font-semibold text-text-main">
+          {fmt(total)}
         </td>
       </>
     );
   }
+
+  const inCost = item.inputCost;
+  const caCost = item.cachedCost;
+  const outCost = item.outputCost;
+  const totCost = item.totalCost ?? item.cost ?? 0;
+
   return (
     <>
-      <td className="px-6 py-3 text-right text-text-muted">
-        {isSummary && item.inputCost === undefined ? "—" : fmtCost(item.inputCost)}
+      <td className="px-6 py-3 text-right font-mono text-xs text-text-muted">
+        {isSummary && inCost === undefined ? "—" : fmtCost(inCost)}
       </td>
-      <td className="px-6 py-3 text-right text-text-muted">
-        {item.cachedCost ? fmtCost(item.cachedCost) : "—"}
+      <td className="px-6 py-3 text-right font-mono text-xs text-text-muted">
+        {caCost ? fmtCost(caCost) : "—"}
       </td>
-      <td className="px-6 py-3 text-right text-text-muted">
-        {isSummary && item.outputCost === undefined ? "—" : fmtCost(item.outputCost)}
+      <td className="px-6 py-3 text-right font-mono text-xs text-text-muted">
+        {isSummary && outCost === undefined ? "—" : fmtCost(outCost)}
       </td>
-      <td className="px-6 py-3 text-right font-medium text-warning">
-        {fmtCost(item.totalCost || item.cost)}
+      <td className="px-6 py-3 text-right font-mono text-xs font-bold text-warning">
+        {fmtCost(totCost)}
       </td>
     </>
   );

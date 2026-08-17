@@ -343,8 +343,20 @@ function loadDaysInRange(adapter, maxDays) {
   return adapter.all(`SELECT dateKey, data FROM usageDaily WHERE dateKey >= ?`, [cutoffKey]);
 }
 
-export async function getUsageStats(period = "all") {
+export async function getUsageStats(periodOrFilter = "all") {
   const db = await getAdapter();
+
+  const filter = typeof periodOrFilter === "object" && periodOrFilter !== null
+    ? periodOrFilter
+    : { period: periodOrFilter || "all" };
+
+  const period = filter.period || "all";
+  const startDate = filter.startDate;
+  const endDate = filter.endDate;
+  const filterProvider = filter.provider;
+  const filterModel = filter.model;
+  const filterConnectionId = filter.connectionId;
+  const filterApiKey = filter.apiKey;
 
   const [{ getProviderConnections }, { getApiKeys }, { getProviderNodes }] = await Promise.all([
     import("./connectionsRepo.js"),
@@ -443,7 +455,9 @@ export async function getUsageStats(period = "all") {
     }
   }
 
-  const useDailySummary = period !== "24h" && period !== "today";
+  // Custom date range query OR live history query (today, 24h, or specific filters)
+  const isCustomRange = Boolean(startDate || endDate || period === "custom" || filterProvider || filterModel || filterConnectionId || filterApiKey);
+  const useDailySummary = !isCustomRange && period !== "24h" && period !== "today";
 
   if (useDailySummary) {
     const periodDays = { "7d": 7, "30d": 30, "60d": 60 };
@@ -500,7 +514,7 @@ export async function getUsageStats(period = "all") {
         if (dateKey > (stats.byAccount[accountKey].lastUsed || "")) stats.byAccount[accountKey].lastUsed = dateKey;
       }
 
-      for (const [akKey, ak] of Object.entries(day.byApiKey || {})) {
+      for (const [k, ak] of Object.entries(day.byApiKey || {})) {
         const rawModel = ak.rawModel || "";
         const provider = ak.provider || "";
         const providerDisplayName = providerNodeNameMap[provider] || provider;
@@ -509,6 +523,7 @@ export async function getUsageStats(period = "all") {
         const keyName = keyInfo?.name || (apiKeyVal ? apiKeyVal.slice(0, 8) + "..." : "Local (No API Key)");
         const apiKeyMasked = maskApiKey(apiKeyVal);
         const apiKeyKey = apiKeyMasked || "local-no-key";
+        const akKey = `${apiKeyKey}|${rawModel}|${provider || "unknown"}`;
         if (!stats.byApiKey[akKey]) {
           stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, rawModel, provider: providerDisplayName, apiKeyMasked, keyName, apiKeyKey, lastUsed: dateKey };
         }
@@ -554,35 +569,65 @@ export async function getUsageStats(period = "all") {
         if (stats.byAccount[accountKey] && new Date(ts) > new Date(stats.byAccount[accountKey].lastUsed)) stats.byAccount[accountKey].lastUsed = ts;
       }
 
-      const apiKeyKey = (e.apiKey && typeof e.apiKey === "string")
-        ? `${e.apiKey}|${e.model}|${e.provider || "unknown"}`
-        : "local-no-key";
-      if (stats.byApiKey[apiKeyKey] && new Date(ts) > new Date(stats.byApiKey[apiKeyKey].lastUsed)) stats.byApiKey[apiKeyKey].lastUsed = ts;
+      const apiKeyMasked = maskApiKey(e.apiKey);
+      const akKey = `${apiKeyMasked || "local-no-key"}|${e.model}|${e.provider || "unknown"}`;
+      if (stats.byApiKey[akKey] && new Date(ts) > new Date(stats.byApiKey[akKey].lastUsed)) stats.byApiKey[akKey].lastUsed = ts;
 
       const endpoint = e.endpoint || "Unknown";
       const endpointKey = `${endpoint}|${e.model}|${e.provider || "unknown"}`;
       if (stats.byEndpoint[endpointKey] && new Date(ts) > new Date(stats.byEndpoint[endpointKey].lastUsed)) stats.byEndpoint[endpointKey].lastUsed = ts;
     }
   } else {
-    // 24h / today: live history
-    let cutoff;
-    if (period === "today") {
+    // Live history query (today, 24h, custom range, or filtered)
+    const conds = [];
+    const params = [];
+
+    if (startDate) {
+      conds.push("timestamp >= ?");
+      params.push(new Date(startDate).toISOString());
+    } else if (period === "today") {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
-      cutoff = startOfDay.toISOString();
-    } else {
-      cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
+      conds.push("timestamp >= ?");
+      params.push(startOfDay.toISOString());
+    } else if (period === "24h") {
+      conds.push("timestamp >= ?");
+      params.push(new Date(Date.now() - PERIOD_MS["24h"]).toISOString());
     }
+
+    if (endDate) {
+      conds.push("timestamp <= ?");
+      params.push(new Date(endDate).toISOString());
+    }
+
+    if (filterProvider) {
+      conds.push("provider = ?");
+      params.push(filterProvider);
+    }
+    if (filterModel) {
+      conds.push("model = ?");
+      params.push(filterModel);
+    }
+    if (filterConnectionId) {
+      conds.push("connectionId = ?");
+      params.push(filterConnectionId);
+    }
+    if (filterApiKey) {
+      conds.push("apiKey = ?");
+      params.push(filterApiKey);
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
     const filtered = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
-      [cutoff]
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory ${where} ORDER BY timestamp ASC`,
+      params
     );
 
     for (const r of filtered) {
       const tokens = parseJson(r.tokens, {}) || {};
-      const promptTokens = tokens.prompt_tokens || 0;
-      const completionTokens = tokens.completion_tokens || 0;
-      const cachedTokens = tokens.cached_tokens || tokens.cache_read_input_tokens || 0;
+      const promptTokens = r.promptTokens ?? tokens.prompt_tokens ?? tokens.input_tokens ?? 0;
+      const completionTokens = r.completionTokens ?? tokens.completion_tokens ?? tokens.output_tokens ?? 0;
+      const cachedTokens = tokens.cached_tokens ?? tokens.cache_read_input_tokens ?? 0;
       const entryCost = r.cost || 0;
       const providerDisplayName = providerNodeNameMap[r.provider] || r.provider;
 
@@ -658,9 +703,66 @@ export async function getUsageStats(period = "all") {
   return stats;
 }
 
-export async function getChartData(period = "7d") {
+export async function getChartData(periodOrFilter = "7d") {
   const db = await getAdapter();
   const now = Date.now();
+
+  const filter = typeof periodOrFilter === "object" && periodOrFilter !== null
+    ? periodOrFilter
+    : { period: periodOrFilter || "7d" };
+
+  const period = filter.period || "7d";
+  const startDate = filter.startDate;
+  const endDate = filter.endDate;
+
+  // Custom date-time range bucketing
+  if (startDate || endDate || period === "custom") {
+    const startTs = startDate ? new Date(startDate).getTime() : now - 7 * 86400000;
+    const endTs = endDate ? new Date(endDate).getTime() : now;
+    const diffMs = Math.max(0, endTs - startTs);
+
+    let bucketMs = 3600000; // 1 hour default
+    let labelFn = (ts) => new Date(ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+
+    if (diffMs <= 3 * 3600000) {
+      bucketMs = 5 * 60 * 1000; // 5 minutes for <= 3h
+    } else if (diffMs <= 12 * 3600000) {
+      bucketMs = 15 * 60 * 1000; // 15 minutes for <= 12h
+    } else if (diffMs > 48 * 3600000 && diffMs <= 60 * 86400000) {
+      bucketMs = 86400000; // 1 day
+      labelFn = (ts) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    } else if (diffMs > 60 * 86400000) {
+      bucketMs = 7 * 86400000; // 1 week
+      labelFn = (ts) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    } else if (diffMs > 24 * 3600000) {
+      // 24-48h: hourly with date
+      labelFn = (ts) => {
+        const d = new Date(ts);
+        return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:00`;
+      };
+    }
+
+    const bucketCount = Math.max(1, Math.min(100, Math.ceil(diffMs / bucketMs)));
+    const buckets = Array.from({ length: bucketCount }, (_, i) => {
+      const bStart = startTs + i * bucketMs;
+      return { label: labelFn(bStart), tokens: 0, cost: 0 };
+    });
+
+    const rows = db.all(
+      `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ? AND timestamp <= ?`,
+      [new Date(startTs).toISOString(), new Date(endTs).toISOString()]
+    );
+    for (const r of rows) {
+      const t = new Date(r.timestamp).getTime();
+      if (t < startTs || t > endTs) continue;
+      const idx = Math.min(Math.floor((t - startTs) / bucketMs), bucketCount - 1);
+      if (idx >= 0 && idx < bucketCount) {
+        buckets[idx].tokens += (r.promptTokens || 0) + (r.completionTokens || 0);
+        buckets[idx].cost += r.cost || 0;
+      }
+    }
+    return buckets;
+  }
 
   if (period === "today") {
     const bucketCount = 24;

@@ -7,34 +7,25 @@ const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_MAX_JSON_SIZE = 5 * 1024;
 const CONFIG_CACHE_TTL_MS = 5000;
 
-let cachedConfig = null;
-let cachedConfigTs = 0;
-
 async function getObservabilityConfig() {
-  if (cachedConfig && (Date.now() - cachedConfigTs) < CONFIG_CACHE_TTL_MS) return cachedConfig;
   try {
     const { getSettings } = await import("./settingsRepo.js");
     const settings = await getSettings();
     const envRequestLogs = process.env.ENABLE_REQUEST_LOGS;
     if (envRequestLogs !== undefined) {
       const enabled = envRequestLogs.toLowerCase() === "true";
-      cachedConfig = {
+      return {
         enabled,
         maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || String(DEFAULT_MAX_RECORDS), 10),
         batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || String(DEFAULT_BATCH_SIZE), 10),
         flushIntervalMs: settings.observabilityFlushIntervalMs || parseInt(process.env.OBSERVABILITY_FLUSH_INTERVAL_MS || String(DEFAULT_FLUSH_INTERVAL_MS), 10),
         maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "5", 10)) * 1024,
       };
-      cachedConfigTs = Date.now();
-      return cachedConfig;
     }
     const envFallback = process.env.OBSERVABILITY_ENABLED !== "false";
-    const uiFlag = typeof settings.enableObservability === "boolean";
-    const enabled = uiFlag
-      ? settings.enableObservability
-      : envFallback;
+    const enabled = settings.enableObservability === true || settings.enableObservability2 === true || (settings.enableObservability === undefined && envFallback);
 
-    cachedConfig = {
+    return {
       enabled,
       maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || String(DEFAULT_MAX_RECORDS), 10),
       batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || String(DEFAULT_BATCH_SIZE), 10),
@@ -42,7 +33,7 @@ async function getObservabilityConfig() {
       maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "5", 10)) * 1024,
     };
   } catch {
-    cachedConfig = {
+    return {
       enabled: false,
       maxRecords: DEFAULT_MAX_RECORDS,
       batchSize: DEFAULT_BATCH_SIZE,
@@ -50,8 +41,6 @@ async function getObservabilityConfig() {
       maxJsonSize: DEFAULT_MAX_JSON_SIZE,
     };
   }
-  cachedConfigTs = Date.now();
-  return cachedConfig;
 }
 
 let writeBuffer = [];
@@ -107,6 +96,7 @@ async function flushToDatabase() {
             provider: item.provider || null,
             model: item.model || null,
             connectionId: item.connectionId || null,
+            apiKey: item.apiKey || null,
             timestamp: item.timestamp,
             status: item.status || null,
             latency: item.latency || {},
@@ -150,13 +140,19 @@ export async function saveRequestDetail(detail) {
   // flushToDatabase() drains entire buffer in a loop, so all pushes during await are persisted.
   if (writeBuffer.length >= config.batchSize) {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    flushToDatabase().catch((e) => console.error("[requestDetailsRepo] flush err:", e));
+    await flushToDatabase().catch((e) => console.error("[requestDetailsRepo] flush err:", e));
   } else if (!flushTimer) {
     flushTimer = setTimeout(() => {
       flushTimer = null;
       flushToDatabase().catch(() => {});
     }, config.flushIntervalMs);
   }
+}
+
+function maskApiKey(key) {
+  if (!key || typeof key !== "string") return null;
+  if (key.length <= 8) return key.charAt(0) + "***";
+  return key.slice(0, 8) + "***";
 }
 
 export async function getRequestDetails(filter = {}) {
@@ -184,7 +180,35 @@ export async function getRequestDetails(filter = {}) {
     `SELECT data FROM requestDetails ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
     [...params, pageSize, offset]
   );
-  const details = rows.map((r) => parseJson(r.data, {}));
+
+  const [{ getProviderConnections }, { getApiKeys }] = await Promise.all([
+    import("./connectionsRepo.js").catch(() => ({ getProviderConnections: async () => [] })),
+    import("./apiKeysRepo.js").catch(() => ({ getApiKeys: async () => [] })),
+  ]);
+
+  let allConnections = [];
+  try { allConnections = await getProviderConnections(); } catch {}
+  const connectionMap = {};
+  for (const c of allConnections) connectionMap[c.id] = c.name || c.email || c.id;
+
+  let allApiKeys = [];
+  try { allApiKeys = await getApiKeys(); } catch {}
+  const apiKeyMap = {};
+  for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id };
+
+  const details = rows.map((r) => {
+    const d = parseJson(r.data, {});
+    if (d && typeof d === "object" && Object.keys(d).length > 0) {
+      const connId = d.connectionId;
+      const apiKey = d.apiKey;
+      if (connId && connectionMap[connId]) d.accountName = connectionMap[connId];
+      if (apiKey) {
+        d.keyName = apiKeyMap[apiKey]?.name || maskApiKey(apiKey);
+        d.apiKeyMasked = maskApiKey(apiKey);
+      }
+    }
+    return d;
+  });
 
   return {
     details,

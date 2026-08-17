@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getRequestDetails } from "@/lib/usageDb";
 
+export const dynamic = "force-dynamic";
+
 /**
  * GET /api/usage/request-details
  * Query parameters: page, pageSize (1-100), provider, model, connectionId, status, startDate, endDate
@@ -16,6 +18,7 @@ export async function GET(request) {
     const provider = searchParams.get("provider");
     const model = searchParams.get("model");
     const connectionId = searchParams.get("connectionId");
+    const apiKey = searchParams.get("apiKey");
     const status = searchParams.get("status");
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
@@ -42,6 +45,7 @@ export async function GET(request) {
     if (provider) filter.provider = provider;
     if (model) filter.model = model;
     if (connectionId) filter.connectionId = connectionId;
+    if (apiKey) filter.apiKey = apiKey;
     if (status) filter.status = status;
     if (startDate) filter.startDate = startDate;
     if (endDate) filter.endDate = endDate;

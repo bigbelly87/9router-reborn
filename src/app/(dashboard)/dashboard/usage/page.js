@@ -1,17 +1,10 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { UsageStats, RequestLogger, CardSkeleton, SegmentedControl } from "@/shared/components";
 import RequestDetailsTab from "./components/RequestDetailsTab";
-
-const PERIODS = [
-  { value: "today", label: "Today" },
-  { value: "24h", label: "24h" },
-  { value: "7d", label: "7D" },
-  { value: "30d", label: "30D" },
-  { value: "60d", label: "60D" },
-];
+import TimeRangeSelector from "./components/TimeRangeSelector";
 
 export default function UsagePage() {
   return (
@@ -25,24 +18,52 @@ function UsageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [period, setPeriod] = useState("today");
+  const [period, setPeriod] = useState(() => searchParams.get("period") || "today");
+  const [startDate, setStartDate] = useState(() => searchParams.get("startDate") || "");
+  const [endDate, setEndDate] = useState(() => searchParams.get("endDate") || "");
 
   const tabFromUrl = searchParams.get("tab");
   const activeTab = tabFromUrl && ["overview", "logs", "details"].includes(tabFromUrl)
     ? tabFromUrl
     : "overview";
 
+  // Sync state if searchParams change externally (e.g. browser back/forward)
+  useEffect(() => {
+    setPeriod(searchParams.get("period") || "today");
+    setStartDate(searchParams.get("startDate") || "");
+    setEndDate(searchParams.get("endDate") || "");
+  }, [searchParams]);
+
   const handleTabChange = (value) => {
     if (value === activeTab) return;
-    const params = new URLSearchParams(searchParams);
+    const params = new URLSearchParams(searchParams.toString());
     params.set("tab", value);
-    router.push(`/dashboard/usage?${params.toString()}`, { scroll: false });
+    router.replace(`/dashboard/usage?${params.toString()}`, { scroll: false });
+  };
+
+  const handleTimeRangeChange = ({ period: p, startDate: s, endDate: e }) => {
+    const newPeriod = p || "today";
+    const newStart = s || "";
+    const newEnd = e || "";
+
+    setPeriod(newPeriod);
+    setStartDate(newStart);
+    setEndDate(newEnd);
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("period", newPeriod);
+    if (newStart) params.set("startDate", newStart);
+    else params.delete("startDate");
+    if (newEnd) params.set("endDate", newEnd);
+    else params.delete("endDate");
+
+    router.replace(`/dashboard/usage?${params.toString()}`, { scroll: false });
   };
 
   return (
     <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-      {/* Tabs + period selector on same row */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      {/* Tabs + TimeRangeSelector on top row */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <SegmentedControl
           options={[
             { value: "overview", label: "Overview" },
@@ -52,24 +73,32 @@ function UsageContent() {
           onChange={handleTabChange}
           className="w-full sm:w-auto"
         />
-        {activeTab === "overview" && (
-          <SegmentedControl
-            options={PERIODS}
-            value={period}
-            onChange={setPeriod}
-            size="sm"
-            className="w-full sm:w-auto"
-          />
-        )}
+        <TimeRangeSelector
+          period={period}
+          startDate={startDate}
+          endDate={endDate}
+          onChange={handleTimeRangeChange}
+        />
       </div>
 
       {activeTab === "overview" && (
         <Suspense fallback={<CardSkeleton />}>
-          <UsageStats period={period} setPeriod={setPeriod} hidePeriodSelector />
+          <UsageStats
+            period={period}
+            startDate={startDate}
+            endDate={endDate}
+            hidePeriodSelector
+            onTimeRangeChange={handleTimeRangeChange}
+          />
         </Suspense>
       )}
       {activeTab === "logs" && <RequestLogger />}
-      {activeTab === "details" && <RequestDetailsTab />}
+      {activeTab === "details" && (
+        <RequestDetailsTab
+          initialStartDate={startDate}
+          initialEndDate={endDate}
+        />
+      )}
     </div>
   );
 }

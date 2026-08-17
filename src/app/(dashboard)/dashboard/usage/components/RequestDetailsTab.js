@@ -8,6 +8,33 @@ import Pagination from "@/shared/components/Pagination";
 import { cn } from "@/shared/utils/cn";
 import { AI_PROVIDERS, getProviderByAlias } from "@/shared/constants/providers";
 
+
+function formatToLocalDatetime(isoOrDate) {
+  if (!isoOrDate) return "";
+  const d = typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
+  if (isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function toIsoSafe(dtStr) {
+  if (!dtStr) return "";
+  if (typeof dtStr === "string" && (dtStr.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(dtStr))) {
+    const d = new Date(dtStr);
+    return isNaN(d.getTime()) ? "" : d.toISOString();
+  }
+  const d = new Date(dtStr);
+  if (!isNaN(d.getTime())) return d.toISOString();
+  const d2 = new Date(dtStr + ":00");
+  if (!isNaN(d2.getTime())) return d2.toISOString();
+  return "";
+}
+
 let providerNameCache = null;
 let providerNodesCache = null;
 
@@ -99,7 +126,7 @@ function getInputTokens(tokens) {
   return prompt < cache ? cache : prompt;
 }
 
-export default function RequestDetailsTab() {
+export default function RequestDetailsTab({ initialStartDate = "", initialEndDate = "" } = {}) {
   const [details, setDetails] = useState([]);
   const [pagination, setPagination] = useState({
     page: 1,
@@ -112,22 +139,42 @@ export default function RequestDetailsTab() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [providers, setProviders] = useState([]);
   const [providerNameCache, setProviderNameCache] = useState(null);
+  const [connections, setConnections] = useState([]);
+  const [apiKeys, setApiKeys] = useState([]);
   const [filters, setFilters] = useState({
     provider: "",
-    startDate: "",
-    endDate: ""
+    connectionId: "",
+    apiKey: "",
+    startDate: initialStartDate,
+    endDate: initialEndDate
   });
+
+  useEffect(() => {
+    if (initialStartDate !== undefined || initialEndDate !== undefined) {
+      setFilters(prev => ({
+        ...prev,
+        startDate: initialStartDate || "",
+        endDate: initialEndDate || "",
+      }));
+    }
+  }, [initialStartDate, initialEndDate]);
 
   const fetchProviders = useCallback(async () => {
     try {
-      const res = await fetch("/api/usage/providers");
+      const [res, connRes, keyRes] = await Promise.all([
+        fetch("/api/usage/providers"),
+        fetch("/api/providers").then(r => r.ok ? r.json() : { connections: [] }).catch(() => ({ connections: [] })),
+        fetch("/api/api-keys").then(r => r.ok ? r.json() : { keys: [] }).catch(() => ({ keys: [] })),
+      ]);
       const data = await res.json();
       setProviders(data.providers || []);
+      setConnections(connRes.connections || []);
+      setApiKeys(keyRes.keys || keyRes.apiKeys || []);
 
       const cache = await fetchProviderNames();
       setProviderNameCache(cache.providerNameCache);
     } catch (error) {
-      console.error("Failed to fetch providers:", error);
+      console.error("Failed to fetch metadata:", error);
     }
   }, []);
 
@@ -139,6 +186,8 @@ export default function RequestDetailsTab() {
         pageSize: pagination.pageSize.toString()
       });
       if (filters.provider) params.append("provider", filters.provider);
+      if (filters.connectionId) params.append("connectionId", filters.connectionId);
+      if (filters.apiKey) params.append("apiKey", filters.apiKey);
       if (filters.startDate) params.append("startDate", filters.startDate);
       if (filters.endDate) params.append("endDate", filters.endDate);
 
@@ -176,22 +225,22 @@ export default function RequestDetailsTab() {
   };
 
   const handleClearFilters = () => {
-    setFilters({ provider: "", startDate: "", endDate: "" });
+    setFilters({ provider: "", connectionId: "", apiKey: "", startDate: "", endDate: "" });
   };
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <Card padding="md">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="flex min-w-0 flex-col gap-2">
-            <label htmlFor="provider-filter" className="text-sm font-medium text-text-main">Provider</label>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label htmlFor="provider-filter" className="text-xs font-semibold uppercase tracking-wider text-text-muted">Provider</label>
             <select
               id="provider-filter"
               value={filters.provider}
               onChange={(e) => setFilters({ ...filters, provider: e.target.value })}
               className={cn(
-                "h-9 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
-                "text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20",
+                "h-9 px-3 rounded-lg border border-border bg-surface",
+                "text-xs font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20",
                 "w-full min-w-0 cursor-pointer"
               )}
               style={{ colorScheme: 'auto' }}
@@ -204,42 +253,63 @@ export default function RequestDetailsTab() {
               ))}
             </select>
           </div>
+
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label htmlFor="account-filter" className="text-xs font-semibold uppercase tracking-wider text-text-muted">Account</label>
+            <select
+              id="account-filter"
+              value={filters.connectionId}
+              onChange={(e) => setFilters({ ...filters, connectionId: e.target.value })}
+              className={cn(
+                "h-9 px-3 rounded-lg border border-border bg-surface",
+                "text-xs font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20",
+                "w-full min-w-0 cursor-pointer"
+              )}
+              style={{ colorScheme: 'auto' }}
+            >
+              <option value="">All Accounts</option>
+              {connections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name || c.email || c.id}
+                </option>
+              ))}
+            </select>
+          </div>
           
-          <div className="flex min-w-0 flex-col gap-2">
-            <label htmlFor="start-date-filter" className="text-sm font-medium text-text-main">Start Date</label>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label htmlFor="start-date-filter" className="text-xs font-semibold uppercase tracking-wider text-text-muted">From (Start Date)</label>
             <input
               id="start-date-filter"
               type="datetime-local"
-              value={filters.startDate}
-              onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
+              value={formatToLocalDatetime(filters.startDate)}
+              onChange={(e) => setFilters({ ...filters, startDate: toIsoSafe(e.target.value) })}
               className={cn(
-                "h-9 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
-                "w-full min-w-0 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20"
+                "h-9 px-3 rounded-lg border border-border bg-surface",
+                "w-full min-w-0 text-xs font-mono text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20"
               )}
             />
           </div>
 
-          <div className="flex min-w-0 flex-col gap-2">
-            <label htmlFor="end-date-filter" className="text-sm font-medium text-text-main">End Date</label>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label htmlFor="end-date-filter" className="text-xs font-semibold uppercase tracking-wider text-text-muted">To (End Date)</label>
             <input
               id="end-date-filter"
               type="datetime-local"
-              value={filters.endDate}
-              onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+              value={formatToLocalDatetime(filters.endDate)}
+              onChange={(e) => setFilters({ ...filters, endDate: toIsoSafe(e.target.value) })}
               className={cn(
-                "h-9 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
-                "w-full min-w-0 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20"
+                "h-9 px-3 rounded-lg border border-border bg-surface",
+                "w-full min-w-0 text-xs font-mono text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20"
               )}
             />
           </div>
           
-          <div className="flex min-w-0 flex-col gap-2 sm:col-span-2 lg:col-span-1">
-            <span className="hidden text-sm font-medium text-text-main opacity-0 lg:block" aria-hidden="true">Clear</span>
+          <div className="flex min-w-0 flex-col justify-end">
             <Button 
               variant="ghost" 
               onClick={handleClearFilters}
-              disabled={!filters.provider && !filters.startDate && !filters.endDate}
-              className="w-full"
+              disabled={!filters.provider && !filters.connectionId && !filters.apiKey && !filters.startDate && !filters.endDate}
+              className="w-full text-xs"
             >
               Clear Filters
             </Button>
@@ -249,24 +319,24 @@ export default function RequestDetailsTab() {
 
       <Card padding="none">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[880px]">
+          <table className="w-full min-w-[960px]">
             <thead>
-              <tr className="border-b border-black/5 dark:border-white/5">
-                <th className="text-left p-4 text-sm font-semibold text-text-main">Timestamp</th>
-                <th className="text-left p-4 text-sm font-semibold text-text-main">Model</th>
-                <th className="text-left p-4 text-sm font-semibold text-text-main">Provider</th>
-                <th className="text-right p-4 text-sm font-semibold text-text-main">Input Tokens</th>
-                <th className="text-right p-4 text-sm font-semibold text-text-main">Cached</th>
-                <th className="text-right p-4 text-sm font-semibold text-text-main">Cache Creation</th>
-                <th className="text-right p-4 text-sm font-semibold text-text-main">Output Tokens</th>
-                <th className="text-left p-4 text-sm font-semibold text-text-main">Latency</th>
-                <th className="text-center p-4 text-sm font-semibold text-text-main">Action</th>
+              <tr className="border-b border-border bg-bg-subtle/40">
+                <th className="text-left p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Timestamp</th>
+                <th className="text-left p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Model</th>
+                <th className="text-left p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Account / Key</th>
+                <th className="text-left p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Provider</th>
+                <th className="text-right p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Input Tokens</th>
+                <th className="text-right p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Cached</th>
+                <th className="text-right p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Output Tokens</th>
+                <th className="text-left p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Latency</th>
+                <th className="text-center p-4 text-xs font-semibold uppercase tracking-wider text-text-muted">Action</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="7" className="p-8 text-center text-text-muted">
+                  <td colSpan="9" className="p-8 text-center text-text-muted">
                     <div className="flex items-center justify-center gap-2">
                       <span className="material-symbols-outlined animate-spin text-[20px]">progress_activity</span>
                       Loading...
@@ -275,7 +345,7 @@ export default function RequestDetailsTab() {
                 </tr>
               ) : details.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="p-8 text-center text-text-muted">
+                  <td colSpan="9" className="p-8 text-center text-text-muted">
                     No request details found
                   </td>
                 </tr>
@@ -283,32 +353,46 @@ export default function RequestDetailsTab() {
                 details.map((detail, index) => (
                   <tr
                     key={`${detail.id}-${index}`}
-                    className="border-b border-black/5 dark:border-white/5 last:border-b-0 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors"
+                    className="border-b border-border last:border-b-0 hover:bg-bg-subtle/30 transition-colors text-xs"
                   >
-                    <td className="whitespace-nowrap p-4 text-sm text-text-main">
+                    <td className="whitespace-nowrap p-4 font-mono text-text-muted">
                       {new Date(detail.timestamp).toLocaleString()}
                     </td>
-                    <td className="max-w-[260px] truncate p-4 font-mono text-sm text-text-main">
+                    <td className="max-w-[200px] truncate p-4 font-mono font-medium text-text-main" title={detail.model}>
                       {detail.model}
                     </td>
-                    <td className="max-w-[180px] truncate p-4 text-sm text-text-main">
+                    <td className="p-4 text-text-main">
+                      <div className="flex flex-col gap-0.5 max-w-[160px]">
+                        {detail.accountName && (
+                          <span className="font-semibold text-primary truncate" title={detail.accountName}>
+                            {detail.accountName}
+                          </span>
+                        )}
+                        {detail.keyName && (
+                          <span className="font-mono text-[11px] text-text-muted truncate" title={detail.keyName}>
+                            🔑 {detail.keyName}
+                          </span>
+                        )}
+                        {!detail.accountName && !detail.keyName && (
+                          <span className="text-text-muted">—</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="max-w-[140px] truncate p-4 text-text-main">
                        <span className="font-medium">
                          {getProviderName(detail.provider, providerNameCache)}
                        </span>
                      </td>
-                    <td className="p-4 text-sm text-text-main text-right font-mono">
+                    <td className="p-4 text-right font-mono text-primary font-medium">
                       {getInputTokens(detail.tokens).toLocaleString()}
                     </td>
-                    <td className="p-4 text-sm text-text-main text-right font-mono">
+                    <td className="p-4 text-right font-mono text-info font-medium">
                       {getCachedTokens(detail.tokens) > 0 ? getCachedTokens(detail.tokens).toLocaleString() : "—"}
                     </td>
-                    <td className="p-4 text-sm text-text-main text-right font-mono">
-                      {getCacheCreationTokens(detail.tokens) > 0 ? getCacheCreationTokens(detail.tokens).toLocaleString() : "—"}
-                    </td>
-                    <td className="p-4 text-sm text-text-main text-right font-mono">
+                    <td className="p-4 text-right font-mono text-success font-medium">
                       {detail.tokens?.completion_tokens?.toLocaleString() || 0}
                     </td>
-                    <td className="p-4 text-sm text-text-muted">
+                    <td className="p-4 text-text-muted">
                       <div className="flex flex-col gap-0.5">
                         <div>TTFT: <span className="font-mono">{detail.latency?.ttft || 0}ms</span></div>
                         <div>Total: <span className="font-mono">{detail.latency?.total || 0}ms</span></div>
@@ -319,6 +403,7 @@ export default function RequestDetailsTab() {
                         variant="outline"
                         size="sm"
                         onClick={() => handleViewDetail(detail)}
+                        className="text-xs"
                       >
                         Detail
                       </Button>
@@ -331,7 +416,7 @@ export default function RequestDetailsTab() {
         </div>
 
         {!loading && details.length > 0 && (
-          <div className="border-t border-black/5 dark:border-white/5">
+          <div className="border-t border-border">
             <Pagination
               currentPage={pagination.page}
               pageSize={pagination.pageSize}
@@ -361,20 +446,32 @@ export default function RequestDetailsTab() {
                 <span className="text-text-main">{new Date(selectedDetail.timestamp).toLocaleString()}</span>
               </div>
               <div>
-                 <span className="text-text-muted">Provider:</span>{" "}
-                 <span className="text-text-main font-medium">{getProviderName(selectedDetail.provider, providerNameCache)}</span>
-               </div>
+                <span className="text-text-muted">Provider:</span>{" "}
+                <span className="text-text-main font-medium">{getProviderName(selectedDetail.provider, providerNameCache)}</span>
+              </div>
               <div>
                 <span className="text-text-muted">Model:</span>{" "}
                 <span className="text-text-main font-mono">{selectedDetail.model}</span>
               </div>
+              {selectedDetail.accountName && (
+                <div>
+                  <span className="text-text-muted">Account:</span>{" "}
+                  <span className="text-text-main font-medium text-primary">{selectedDetail.accountName}</span>
+                </div>
+              )}
+              {selectedDetail.keyName && (
+                <div>
+                  <span className="text-text-muted">API Key:</span>{" "}
+                  <span className="text-text-main font-mono">{selectedDetail.keyName}</span>
+                </div>
+              )}
               <div>
                 <span className="text-text-muted">Status:</span>{" "}
                 <span className={cn(
                   "font-medium",
-                  selectedDetail.status === "success" ? "text-green-600" : "text-red-600"
+                  selectedDetail.status === "success" || selectedDetail.status === "ok" ? "text-success" : "text-error"
                 )}>
-                  {selectedDetail.status}
+                  {selectedDetail.status || "ok"}
                 </span>
               </div>
               <div>
