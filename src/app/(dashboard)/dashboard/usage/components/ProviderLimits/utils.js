@@ -36,6 +36,54 @@ export function getConnectionQuotaRemaining(connection, quotaData) {
   return Number.POSITIVE_INFINITY;
 }
 
+export function getConnectionRemainingPercentage(connection, quotaData = {}) {
+  if (connection.isActive === false) return 0;
+  if (
+    connection.testStatus === "error" ||
+    connection.testStatus === "expired" ||
+    connection.testStatus === "unavailable"
+  ) {
+    return 0;
+  }
+
+  const entry = quotaData[connection.id];
+  if (!entry) return 100;
+  if (entry.message && (!entry.quotas || entry.quotas.length === 0)) return 0;
+
+  const quotas = entry.quotas;
+  if (!Array.isArray(quotas) || quotas.length === 0) return 100;
+
+  const percentages = quotas.map((quota) => getRemainingPercentage(quota));
+  return Math.min(...percentages);
+}
+
+export function getAccountHealthStatus(connection, quotaData = {}) {
+  if (connection.isActive === false) return "red";
+  if (
+    connection.testStatus === "error" ||
+    connection.testStatus === "expired" ||
+    connection.testStatus === "unavailable"
+  ) {
+    return "red";
+  }
+
+  const remPct = getConnectionRemainingPercentage(connection, quotaData);
+  if (remPct > 70) return "green";
+  if (remPct >= 30) return "yellow";
+  return "red";
+}
+
+export function calculateAccountHealthSummary(connections = [], quotaData = {}) {
+  const summary = { green: 0, yellow: 0, red: 0, total: connections.length };
+  for (const conn of connections) {
+    const status = getAccountHealthStatus(conn, quotaData);
+    if (status === "green") summary.green += 1;
+    else if (status === "yellow") summary.yellow += 1;
+    else summary.red += 1;
+  }
+  return summary;
+}
+
 // Stable group-by-provider: first-seen provider order, original order within group.
 function groupByProviderStable(connections) {
   const seen = new Map();
@@ -54,10 +102,10 @@ export function sortVisibleConnections(
   providerFilter,
   quotaSortMode,
 ) {
-  if (providerFilter === "codex" && quotaSortMode !== "default") {
+  if (quotaSortMode && quotaSortMode !== "default") {
     return [...connections].sort((a, b) => {
-      const remainingA = getConnectionQuotaRemaining(a, quotaData);
-      const remainingB = getConnectionQuotaRemaining(b, quotaData);
+      const remainingA = getConnectionRemainingPercentage(a, quotaData);
+      const remainingB = getConnectionRemainingPercentage(b, quotaData);
       const remainingDiff =
         quotaSortMode === "remaining-asc"
           ? remainingA - remainingB

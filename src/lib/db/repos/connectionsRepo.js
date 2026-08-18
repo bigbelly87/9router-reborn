@@ -204,6 +204,24 @@ export async function updateProviderConnection(id, data) {
   return result;
 }
 
+export async function bulkUpdateProviderConnectionStatus(ids, isActive) {
+  if (!Array.isArray(ids) || ids.length === 0) return 0;
+  const db = await getAdapter();
+  let updatedCount = 0;
+  db.transaction(() => {
+    for (const id of ids) {
+      const row = db.get(`SELECT * FROM providerConnections WHERE id = ?`, [id]);
+      if (row) {
+        const existing = rowToConn(row);
+        const merged = { ...existing, isActive, updatedAt: new Date().toISOString() };
+        upsert(db, merged);
+        updatedCount++;
+      }
+    }
+  });
+  return updatedCount;
+}
+
 export async function deleteProviderConnection(id) {
   const db = await getAdapter();
   let ok = false;

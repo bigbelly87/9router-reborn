@@ -37,6 +37,8 @@ import {
   ACCOUNT_PAGE_SIZE_MAX,
   ACCOUNT_FILTER_OPTIONS,
   QUOTA_SORT_OPTIONS,
+  getAccountHealthStatus,
+  calculateAccountHealthSummary,
 } from "./utils";
 import Card from "@/shared/components/Card";
 import { ConfirmModal, EditConnectionModal } from "@/shared/components";
@@ -149,6 +151,9 @@ export default function ProviderLimits() {
   const [providerOptions, setProviderOptions] = useState([]);
   const [accountFilter, setAccountFilter] = useState("all");
   const [quotaSortMode, setQuotaSortMode] = useState("default");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [healthFilter, setHealthFilter] = useState("all");
   const [quotaVisibility, setQuotaVisibility] = useState({});
   const [expiringFirst, setExpiringFirst] = useState(false);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
@@ -173,6 +178,17 @@ export default function ProviderLimits() {
   const countdownRef = useRef(null);
   const tickCountRef = useRef(0);
 
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setSearchTerm(searchInput.trim());
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchInput]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm]);
+
   const fetchConnections = useCallback(
     async (targetPage = page) => {
       try {
@@ -185,6 +201,10 @@ export default function ProviderLimits() {
 
         if (providerFilter !== "all") {
           params.set("provider", providerFilter);
+        }
+
+        if (searchTerm) {
+          params.set("search", searchTerm);
         }
 
         const response = await fetch(
@@ -212,7 +232,7 @@ export default function ProviderLimits() {
         return [];
       }
     },
-    [accountFilter, expiringFirst, page, pageSize, providerFilter],
+    [accountFilter, expiringFirst, page, pageSize, providerFilter, searchTerm],
   );
 
   // Fetch quota for a specific connection
@@ -684,16 +704,34 @@ export default function ProviderLimits() {
     };
   }, [autoRefresh, refreshAll, hasHydratedAutoRefresh]);
 
+  const accountHealthSummary = useMemo(
+    () => calculateAccountHealthSummary(connections, quotaData),
+    [connections, quotaData],
+  );
+
+  const healthFilteredConnections = useMemo(() => {
+    if (healthFilter === "all") return connections;
+    return connections.filter(
+      (conn) => getAccountHealthStatus(conn, quotaData) === healthFilter,
+    );
+  }, [connections, healthFilter, quotaData]);
+
   const sortedConnections = useMemo(
     () =>
       sortVisibleConnections(
-        connections,
+        healthFilteredConnections,
         quotaData,
         expiringFirst,
         providerFilter,
         quotaSortMode,
       ),
-    [connections, quotaData, expiringFirst, providerFilter, quotaSortMode],
+    [
+      healthFilteredConnections,
+      quotaData,
+      expiringFirst,
+      providerFilter,
+      quotaSortMode,
+    ],
   );
 
   // Connection is depleted when any quota entry hit the threshold
@@ -796,8 +834,140 @@ export default function ProviderLimits() {
 
   return (
     <div className="space-y-6">
+      {/* Account Quota Health Summary Bar */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <button
+          type="button"
+          onClick={() => setHealthFilter("all")}
+          className={`flex items-center justify-between rounded-xl border p-3 text-left transition-all ${
+            healthFilter === "all"
+              ? "border-primary/50 bg-primary/10 shadow-sm"
+              : "border-black/10 bg-black/[0.02] hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.02] dark:hover:bg-white/5"
+          }`}
+          title="Tất cả tài khoản"
+        >
+          <div>
+            <div className="text-xs text-text-muted">Tổng nick</div>
+            <div className="text-lg font-bold text-text-primary tabular-nums">
+              {accountHealthSummary.total}
+            </div>
+          </div>
+          <span className="material-symbols-outlined text-[20px] text-text-muted">
+            account_circle
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setHealthFilter((prev) => (prev === "green" ? "all" : "green"))}
+          className={`flex items-center justify-between rounded-xl border p-3 text-left transition-all ${
+            healthFilter === "green"
+              ? "border-emerald-500/50 bg-emerald-500/15 shadow-sm"
+              : "border-emerald-500/20 bg-emerald-500/5 hover:bg-emerald-500/10"
+          }`}
+          title="Nick xanh (Quota > 70%)"
+        >
+          <div>
+            <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+              <span>🟢</span>
+              <span>Nick xanh</span>
+            </div>
+            <div className="text-lg font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
+              {accountHealthSummary.green}
+              <span className="ml-1 text-xs font-normal opacity-75">
+                ({accountHealthSummary.total > 0 ? Math.round((accountHealthSummary.green / accountHealthSummary.total) * 100) : 0}%)
+              </span>
+            </div>
+          </div>
+          <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+            &gt;70%
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setHealthFilter((prev) => (prev === "yellow" ? "all" : "yellow"))}
+          className={`flex items-center justify-between rounded-xl border p-3 text-left transition-all ${
+            healthFilter === "yellow"
+              ? "border-amber-500/50 bg-amber-500/15 shadow-sm"
+              : "border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10"
+          }`}
+          title="Nick vàng (Quota 30% - 70%)"
+        >
+          <div>
+            <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-medium">
+              <span>🟡</span>
+              <span>Nick vàng</span>
+            </div>
+            <div className="text-lg font-bold text-amber-700 dark:text-amber-300 tabular-nums">
+              {accountHealthSummary.yellow}
+              <span className="ml-1 text-xs font-normal opacity-75">
+                ({accountHealthSummary.total > 0 ? Math.round((accountHealthSummary.yellow / accountHealthSummary.total) * 100) : 0}%)
+              </span>
+            </div>
+          </div>
+          <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+            30-70%
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setHealthFilter((prev) => (prev === "red" ? "all" : "red"))}
+          className={`flex items-center justify-between rounded-xl border p-3 text-left transition-all ${
+            healthFilter === "red"
+              ? "border-rose-500/50 bg-rose-500/15 shadow-sm"
+              : "border-rose-500/20 bg-rose-500/5 hover:bg-rose-500/10"
+          }`}
+          title="Nick đỏ (Quota < 30% hoặc Tắt/Lỗi)"
+        >
+          <div>
+            <div className="flex items-center gap-1.5 text-xs text-rose-600 dark:text-rose-400 font-medium">
+              <span>🔴</span>
+              <span>Nick đỏ</span>
+            </div>
+            <div className="text-lg font-bold text-rose-700 dark:text-rose-300 tabular-nums">
+              {accountHealthSummary.red}
+              <span className="ml-1 text-xs font-normal opacity-75">
+                ({accountHealthSummary.total > 0 ? Math.round((accountHealthSummary.red / accountHealthSummary.total) * 100) : 0}%)
+              </span>
+            </div>
+          </div>
+          <span className="text-xs font-medium text-rose-600 dark:text-rose-400">
+            &lt;30% / Tắt
+          </span>
+        </button>
+      </div>
+
       {/* Header Controls */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-end">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        {/* Account Search Input */}
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-text-muted">
+            search
+          </span>
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Tìm kiếm tài khoản..."
+            className="h-8 w-full rounded-lg border border-black/10 bg-black/[0.02] pl-8 pr-7 text-xs text-text-primary placeholder:text-text-muted outline-none transition-colors focus:border-primary/50 focus:bg-transparent dark:border-white/10 dark:bg-white/[0.03]"
+          />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchInput("");
+                setSearchTerm("");
+              }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
+              title="Clear search"
+            >
+              <span className="material-symbols-outlined text-[14px]">cancel</span>
+            </button>
+          )}
+        </div>
+
         <div className="flex flex-wrap items-center gap-1.5">
           <div className="relative">
             <button
@@ -917,20 +1087,18 @@ export default function ProviderLimits() {
             ))}
           </select>
 
-          {providerFilter === "codex" && (
-            <select
-              value={quotaSortMode}
-              onChange={(event) => setQuotaSortMode(event.target.value)}
-              className="h-8 rounded-lg border border-black/10 bg-black/[0.02] px-2 text-xs text-text-primary outline-none transition-colors hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/10"
-              aria-label="Sort Codex quotas by remaining"
-            >
-              {QUOTA_SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          )}
+          <select
+            value={quotaSortMode}
+            onChange={(event) => setQuotaSortMode(event.target.value)}
+            className="h-8 rounded-lg border border-black/10 bg-black/[0.02] px-2 text-xs text-text-primary outline-none transition-colors hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/10"
+            aria-label="Sort accounts by quota remaining"
+          >
+            {QUOTA_SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
 
           <button
             type="button"

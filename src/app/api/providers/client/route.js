@@ -81,6 +81,7 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const provider = searchParams.get("provider") || "all";
     const accountStatus = searchParams.get("accountStatus") || "all";
+    const search = (searchParams.get("search") || "").trim().toLowerCase();
     const sort = searchParams.get("sort") || "priority";
     const page = parsePositiveInt(searchParams.get("page"), 1);
     const pageSize = Math.min(parsePositiveInt(searchParams.get("pageSize"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
@@ -99,7 +100,16 @@ export async function GET(request) {
       return true;
     });
 
-    const sortedConnections = sortConnections(accountFilteredConnections, sort);
+    const searchFilteredConnections = accountFilteredConnections.filter((conn) => {
+      if (!search) return true;
+      const name = (conn.name || "").toLowerCase();
+      const email = (conn.email || "").toLowerCase();
+      const displayName = (conn.displayName || "").toLowerCase();
+      const id = (conn.id || "").toLowerCase();
+      return name.includes(search) || email.includes(search) || displayName.includes(search) || id.includes(search);
+    });
+
+    const sortedConnections = sortConnections(searchFilteredConnections, sort);
     const total = sortedConnections.length;
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const currentPage = Math.min(page, totalPages);

@@ -63,6 +63,7 @@ export default function ProviderDetailPage() {
   const [selectedConnectionIds, setSelectedConnectionIds] = useState([]);
   const [bulkProxyPoolId, setBulkProxyPoolId] = useState("__none__");
   const [bulkUpdatingProxy, setBulkUpdatingProxy] = useState(false);
+  const [bulkUpdatingStatus, setBulkUpdatingStatus] = useState(false);
   const [providerStrategy, setProviderStrategy] = useState(null);
   const [providerStickyLimit, setProviderStickyLimit] = useState("");
   const [thinkingMode, setThinkingMode] = useState("auto");
@@ -746,6 +747,52 @@ export default function ProviderDetailPage() {
         if (failed > 0) alert(`Deleted ${idsToDelete.length - failed} connection(s), ${failed} failed.`);
       }
     });
+  };
+
+  const handleBulkSetStatus = async (isActive) => {
+    const idsToUpdate = [...selectedConnectionIds];
+    if (idsToUpdate.length === 0) return;
+
+    setBulkUpdatingStatus(true);
+    try {
+      const res = await fetch("/api/providers/bulk-status", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: idsToUpdate, isActive }),
+      });
+
+      if (res.ok) {
+        setConnections((prev) =>
+          prev.map((c) => (idsToUpdate.includes(c.id) ? { ...c, isActive } : c))
+        );
+      } else {
+        // Fallback: update connections individually if bulk endpoint fails
+        let failed = 0;
+        for (const id of idsToUpdate) {
+          try {
+            const individualRes = await fetch(`/api/providers/${id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ isActive }),
+            });
+            if (!individualRes.ok) failed += 1;
+          } catch (e) {
+            console.log("Error updating connection status:", e);
+            failed += 1;
+          }
+        }
+        setConnections((prev) =>
+          prev.map((c) => (idsToUpdate.includes(c.id) ? { ...c, isActive } : c))
+        );
+        if (failed > 0) {
+          alert(`Updated ${idsToUpdate.length - failed} connection(s), ${failed} failed.`);
+        }
+      }
+    } catch (error) {
+      console.log("Error bulk updating connection status:", error);
+    } finally {
+      setBulkUpdatingStatus(false);
+    }
   };
 
   const handleOAuthSuccess = () => {
@@ -1479,14 +1526,37 @@ export default function ProviderDetailPage() {
               {connections.length > 0 && (
                 <>
                   {selectedConnectionIds.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      icon="delete"
-                      onClick={handleBulkDelete}
-                    >
-                      Delete Selected ({selectedConnectionIds.length})
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="success"
+                        icon="toggle_on"
+                        onClick={() => handleBulkSetStatus(true)}
+                        disabled={bulkUpdatingStatus || bulkUpdatingProxy}
+                        loading={bulkUpdatingStatus}
+                      >
+                        Enable Selected ({selectedConnectionIds.length})
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon="toggle_off"
+                        onClick={() => handleBulkSetStatus(false)}
+                        disabled={bulkUpdatingStatus || bulkUpdatingProxy}
+                        loading={bulkUpdatingStatus}
+                      >
+                        Disable Selected ({selectedConnectionIds.length})
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        icon="delete"
+                        onClick={handleBulkDelete}
+                        disabled={bulkUpdatingStatus || bulkUpdatingProxy}
+                      >
+                        Delete Selected ({selectedConnectionIds.length})
+                      </Button>
+                    </>
                   )}
                   <Button
                     size="sm"
