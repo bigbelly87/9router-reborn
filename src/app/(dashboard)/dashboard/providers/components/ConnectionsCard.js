@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
 import { Card, Badge, Button, Modal, Select, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
+import { isConnection4xx, isConnectionError, matchesConnectionStatusFilter } from "../utils.js";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -298,6 +299,7 @@ AddApiKeyModal.propTypes = {
 export default function ConnectionsCard({ providerId, isOAuth }) {
   const [connections, setConnections] = useState([]);
   const [connectionSearchQuery, setConnectionSearchQuery] = useState("");
+  const [connectionStatusFilter, setConnectionStatusFilter] = useState("all");
   const [proxyPools, setProxyPools] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -397,11 +399,37 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
     } catch (e) { console.log("update connection error:", e); }
   };
 
+  const statusCounts = useMemo(() => {
+    let active = 0;
+    let inactive = 0;
+    let error4xx = 0;
+    let errorAll = 0;
+    for (const c of connections) {
+      if (c.isActive === false) inactive += 1;
+      const is4xx = isConnection4xx(c);
+      const isErr = isConnectionError(c);
+      if (is4xx) error4xx += 1;
+      if (isErr) errorAll += 1;
+      if (c.isActive !== false && !isErr) active += 1;
+    }
+    return {
+      all: connections.length,
+      active,
+      inactive,
+      error4xx,
+      errorAll,
+    };
+  }, [connections]);
+
   const filteredConnections = useMemo(() => {
-    if (!connectionSearchQuery.trim()) return connections;
+    let list = connections;
+    if (connectionStatusFilter !== "all") {
+      list = list.filter((conn) => matchesConnectionStatusFilter(connectionStatusFilter, conn));
+    }
+    if (!connectionSearchQuery.trim()) return list;
     const q = connectionSearchQuery.trim().toLowerCase();
     const proxyPoolMap = new Map((proxyPools || []).map((p) => [p.id, p]));
-    return connections.filter((conn, idx) => {
+    return list.filter((conn, idx) => {
       const name = (conn.name || "").toLowerCase();
       const email = (conn.email || "").toLowerCase();
       const displayName = (conn.displayName || "").toLowerCase();
@@ -415,6 +443,8 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
       const proxyUrl = (conn.providerSpecificData?.connectionProxyUrl || "").toLowerCase();
       const statusStr = conn.isActive === false ? "disabled inactive" : "active enabled";
       const lastError = (conn.lastError || "").toLowerCase();
+      const errorCodeStr = String(conn.errorCode || conn.lastErrorCode || "");
+      const is4xx = isConnection4xx(conn);
 
       return (
         name.includes(q) ||
@@ -427,10 +457,12 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
         poolName.includes(q) ||
         proxyUrl.includes(q) ||
         statusStr.includes(q) ||
-        lastError.includes(q)
+        lastError.includes(q) ||
+        errorCodeStr.includes(q) ||
+        (q === "4xx" && is4xx)
       );
     });
-  }, [connections, connectionSearchQuery, proxyPools]);
+  }, [connections, connectionSearchQuery, connectionStatusFilter, proxyPools]);
 
   if (loading) return <Card><div className="h-20 animate-pulse bg-black/5 rounded-lg" /></Card>;
 
@@ -472,48 +504,66 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
           <>
             <div className="mb-3 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between border-b border-black/[0.03] pb-2.5 dark:border-white/[0.03]">
               <span className="text-xs text-text-muted">
-                {connectionSearchQuery.trim()
+                {(connectionSearchQuery.trim() || connectionStatusFilter !== "all")
                   ? `Showing ${filteredConnections.length} of ${connections.length} connection${connections.length === 1 ? "" : "s"}`
                   : `${connections.length} connection${connections.length === 1 ? "" : "s"}`}
               </span>
-              <div className="relative w-full sm:w-64">
-                <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-text-muted pointer-events-none">
-                  search
-                </span>
-                <input
-                  type="text"
-                  value={connectionSearchQuery}
-                  onChange={(e) => setConnectionSearchQuery(e.target.value)}
-                  placeholder="Search accounts..."
-                  className="h-8 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-                {connectionSearchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setConnectionSearchQuery("")}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
-                  >
-                    <span className="material-symbols-outlined text-[14px]">close</span>
-                  </button>
-                )}
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={connectionStatusFilter}
+                  onChange={(e) => setConnectionStatusFilter(e.target.value)}
+                  className="h-8 rounded-lg border border-border bg-surface px-2.5 text-xs text-text-main outline-none transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                  aria-label="Filter accounts by status"
+                >
+                  <option value="all">All Status ({statusCounts.all})</option>
+                  <option value="active">Active ({statusCounts.active})</option>
+                  <option value="4xx">Status 4xx ({statusCounts.error4xx})</option>
+                  <option value="error">All Errors ({statusCounts.errorAll})</option>
+                  <option value="inactive">Disabled ({statusCounts.inactive})</option>
+                </select>
+                <div className="relative w-full sm:w-64">
+                  <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-text-muted pointer-events-none">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={connectionSearchQuery}
+                    onChange={(e) => setConnectionSearchQuery(e.target.value)}
+                    placeholder="Search accounts or 4xx..."
+                    className="h-8 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                  {connectionSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setConnectionSearchQuery("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">close</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
             {filteredConnections.length === 0 ? (
               <div className="py-8 text-center text-sm text-text-muted">
                 <span className="material-symbols-outlined mb-1 block text-2xl">search_off</span>
-                No connections matching &ldquo;{connectionSearchQuery}&rdquo;
+                No connections matching {connectionSearchQuery.trim() ? `"${connectionSearchQuery}"` : "the selected filter"}
                 <div className="mt-2">
                   <button
                     type="button"
-                    onClick={() => setConnectionSearchQuery("")}
+                    onClick={() => {
+                      setConnectionSearchQuery("");
+                      setConnectionStatusFilter("all");
+                    }}
                     className="text-xs text-primary hover:underline font-medium"
                   >
-                    Clear search
+                    Reset filters
                   </button>
                 </div>
               </div>
             ) : (
+
               <div className="flex flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
                 {filteredConnections.map((conn) => {
                   const idx = connections.findIndex((c) => c.id === conn.id);

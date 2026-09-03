@@ -23,6 +23,7 @@ import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
 import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
+import { isConnection4xx, isConnectionError, matchesConnectionStatusFilter } from "../utils.js";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 
@@ -42,6 +43,7 @@ export default function ProviderDetailPage() {
   const { getCaps } = useModelCaps();
   const [connections, setConnections] = useState([]);
   const [connectionSearchQuery, setConnectionSearchQuery] = useState("");
+  const [connectionStatusFilter, setConnectionStatusFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [providerNode, setProviderNode] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
@@ -892,11 +894,37 @@ export default function ProviderDetailPage() {
     }
   };
 
+  const statusCounts = useMemo(() => {
+    let active = 0;
+    let inactive = 0;
+    let error4xx = 0;
+    let errorAll = 0;
+    for (const c of connections) {
+      if (c.isActive === false) inactive += 1;
+      const is4xx = isConnection4xx(c, oneByOneResults[c.id]);
+      const isErr = isConnectionError(c, oneByOneResults[c.id]);
+      if (is4xx) error4xx += 1;
+      if (isErr) errorAll += 1;
+      if (c.isActive !== false && !isErr) active += 1;
+    }
+    return {
+      all: connections.length,
+      active,
+      inactive,
+      error4xx,
+      errorAll,
+    };
+  }, [connections, oneByOneResults]);
+
   const filteredConnections = useMemo(() => {
-    if (!connectionSearchQuery.trim()) return connections;
+    let list = connections;
+    if (connectionStatusFilter !== "all") {
+      list = list.filter((conn) => matchesConnectionStatusFilter(connectionStatusFilter, conn, oneByOneResults[conn.id]));
+    }
+    if (!connectionSearchQuery.trim()) return list;
     const q = connectionSearchQuery.trim().toLowerCase();
     const proxyPoolMap = new Map((proxyPools || []).map((p) => [p.id, p]));
-    return connections.filter((conn, idx) => {
+    return list.filter((conn, idx) => {
       const name = (conn.name || "").toLowerCase();
       const email = (conn.email || "").toLowerCase();
       const displayName = (conn.displayName || "").toLowerCase();
@@ -910,6 +938,8 @@ export default function ProviderDetailPage() {
       const proxyUrl = (conn.providerSpecificData?.connectionProxyUrl || "").toLowerCase();
       const statusStr = conn.isActive === false ? "disabled inactive" : "active enabled";
       const lastError = (conn.lastError || "").toLowerCase();
+      const errorCodeStr = String(conn.errorCode || conn.lastErrorCode || "");
+      const is4xx = isConnection4xx(conn, oneByOneResults[conn.id]);
 
       return (
         name.includes(q) ||
@@ -922,10 +952,12 @@ export default function ProviderDetailPage() {
         poolName.includes(q) ||
         proxyUrl.includes(q) ||
         statusStr.includes(q) ||
-        lastError.includes(q)
+        lastError.includes(q) ||
+        errorCodeStr.includes(q) ||
+        (q === "4xx" && is4xx)
       );
     });
-  }, [connections, connectionSearchQuery, proxyPools]);
+  }, [connections, connectionSearchQuery, connectionStatusFilter, proxyPools, oneByOneResults]);
 
   const selectedConnections = connections.filter((conn) => selectedConnectionIds.includes(conn.id));
   const allFilteredSelected = filteredConnections.length > 0 && filteredConnections.every((conn) => selectedConnectionIds.includes(conn.id));
@@ -1687,54 +1719,72 @@ export default function ProviderDetailPage() {
                         onChange={toggleSelectAllConnections}
                         className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
                       />
-                      Select All {connectionSearchQuery.trim() ? `(${filteredConnections.length})` : ""}
+                      Select All {(connectionSearchQuery.trim() || connectionStatusFilter !== "all") ? `(${filteredConnections.length})` : ""}
                     </label>
-                    {connectionSearchQuery.trim() && (
+                    {(connectionSearchQuery.trim() || connectionStatusFilter !== "all") && (
                       <span className="text-xs text-text-muted">
                         Showing {filteredConnections.length} of {connections.length}
                       </span>
                     )}
                   </div>
-                  <div className="relative w-full sm:w-64">
-                    <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-text-muted pointer-events-none">
-                      search
-                    </span>
-                    <input
-                      type="text"
-                      value={connectionSearchQuery}
-                      onChange={(e) => setConnectionSearchQuery(e.target.value)}
-                      placeholder="Search accounts..."
-                      className="h-8 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
-                    />
-                    {connectionSearchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => setConnectionSearchQuery("")}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">close</span>
-                      </button>
-                    )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={connectionStatusFilter}
+                      onChange={(e) => setConnectionStatusFilter(e.target.value)}
+                      className="h-8 rounded-lg border border-border bg-surface px-2.5 text-xs text-text-main outline-none transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                      aria-label="Filter accounts by status"
+                    >
+                      <option value="all">All Status ({statusCounts.all})</option>
+                      <option value="active">Active ({statusCounts.active})</option>
+                      <option value="4xx">Status 4xx ({statusCounts.error4xx})</option>
+                      <option value="error">All Errors ({statusCounts.errorAll})</option>
+                      <option value="inactive">Disabled ({statusCounts.inactive})</option>
+                    </select>
+                    <div className="relative w-full sm:w-64">
+                      <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-text-muted pointer-events-none">
+                        search
+                      </span>
+                      <input
+                        type="text"
+                        value={connectionSearchQuery}
+                        onChange={(e) => setConnectionSearchQuery(e.target.value)}
+                        placeholder="Search accounts or 4xx..."
+                        className="h-8 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                      {connectionSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setConnectionSearchQuery("")}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">close</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
               {filteredConnections.length === 0 ? (
                 <div className="py-8 text-center text-sm text-text-muted">
                   <span className="material-symbols-outlined mb-1 block text-2xl">search_off</span>
-                  No connections matching &ldquo;{connectionSearchQuery}&rdquo;
+                  No connections matching {connectionSearchQuery.trim() ? `"${connectionSearchQuery}"` : "the selected filter"}
                   <div className="mt-2">
                     <button
                       type="button"
-                      onClick={() => setConnectionSearchQuery("")}
+                      onClick={() => {
+                        setConnectionSearchQuery("");
+                        setConnectionStatusFilter("all");
+                      }}
                       className="text-xs text-primary hover:underline font-medium"
                     >
-                      Clear search
+                      Reset filters
                     </button>
                   </div>
                 </div>
               ) : (
                 connectionsList
               )}
+
               {!isCompatible && (
                 <div className="mt-4 grid grid-cols-1 gap-2 sm:flex">
                   {providerId === "iflow" && (
