@@ -23,7 +23,7 @@ import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
 import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
-import { isConnection401, isConnection4xx, isConnectionError, matchesConnectionStatusFilter } from "../utils.js";
+import { isConnection401, isConnection4xx, isConnectionError, matchesConnectionStatusFilter, buildConnectionsCsv, downloadCsvFile } from "../utils.js";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 
@@ -1023,6 +1023,22 @@ export default function ProviderDetailPage() {
   const allFilteredSelected = filteredConnections.length > 0 && filteredConnections.every((conn) => selectedConnectionIds.includes(conn.id));
   const allSelected = connections.length > 0 && selectedConnectionIds.length === connections.length;
 
+  const handleExportCsv = useCallback(() => {
+    const targetConnections = selectedConnectionIds.length > 0
+      ? connections.filter((c) => selectedConnectionIds.includes(c.id))
+      : filteredConnections;
+
+    if (!targetConnections || targetConnections.length === 0) return;
+
+    const csvContent = buildConnectionsCsv(targetConnections, {
+      oneByOneResults,
+      proxyPools,
+    });
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `${providerId || "provider"}_connections_${dateStr}.csv`;
+    downloadCsvFile(csvContent, filename);
+  }, [connections, selectedConnectionIds, filteredConnections, oneByOneResults, proxyPools, providerId]);
+
   const toggleSelectConnection = (connectionId) => {
     setSelectedConnectionIds((prev) => (
       prev.includes(connectionId)
@@ -1836,6 +1852,22 @@ export default function ProviderDetailPage() {
                         </button>
                       )}
                     </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="download"
+                      onClick={handleExportCsv}
+                      disabled={filteredConnections.length === 0 && selectedConnectionIds.length === 0}
+                      title={
+                        selectedConnectionIds.length > 0
+                          ? `Export ${selectedConnectionIds.length} selected accounts as CSV`
+                          : `Export ${filteredConnections.length} accounts as CSV`
+                      }
+                    >
+                      <span className="hidden sm:inline">Export CSV</span>
+                      <span className="sm:hidden">CSV</span>
+                      {selectedConnectionIds.length > 0 ? ` (${selectedConnectionIds.length})` : ""}
+                    </Button>
                   </div>
                 </div>
               )}

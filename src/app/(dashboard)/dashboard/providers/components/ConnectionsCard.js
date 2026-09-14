@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
 import { Card, Badge, Button, Modal, Select, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
-import { isConnection401, isConnection4xx, isConnectionError, matchesConnectionStatusFilter } from "../utils.js";
+import { isConnection401, isConnection4xx, isConnectionError, matchesConnectionStatusFilter, buildConnectionsCsv, downloadCsvFile } from "../utils.js";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -470,6 +470,16 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
     });
   }, [connections, connectionSearchQuery, connectionStatusFilter, proxyPools]);
 
+  const handleExportCsv = useCallback(() => {
+    if (!filteredConnections || filteredConnections.length === 0) return;
+    const csvContent = buildConnectionsCsv(filteredConnections, {
+      proxyPools,
+    });
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `${providerId || "provider"}_connections_${dateStr}.csv`;
+    downloadCsvFile(csvContent, filename);
+  }, [filteredConnections, proxyPools, providerId]);
+
   if (loading) return <Card><div className="h-20 animate-pulse bg-black/5 rounded-lg" /></Card>;
 
   return (
@@ -549,6 +559,17 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
                     </button>
                   )}
                 </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon="download"
+                  onClick={handleExportCsv}
+                  disabled={filteredConnections.length === 0}
+                  title={`Export ${filteredConnections.length} accounts as CSV`}
+                >
+                  <span className="hidden sm:inline">Export CSV</span>
+                  <span className="sm:hidden">CSV</span>
+                </Button>
               </div>
             </div>
 

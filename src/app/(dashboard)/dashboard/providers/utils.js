@@ -98,4 +98,85 @@ export function matchesConnectionStatusFilter(statusFilter, conn, oneByOneResult
   return true;
 }
 
+export function escapeCsvField(value) {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+export function getConnectionStatusLabel(conn, oneByOneResult = null) {
+  if (!conn) return "Unknown";
+  if (conn.isActive === false) return "Disabled";
+  if (isConnection401(conn, oneByOneResult)) return "Auth 401";
+  if (isConnection4xx(conn, oneByOneResult)) return "Status 4xx";
+  if (isConnectionError(conn, oneByOneResult)) return "Error";
+  return "Active";
+}
+
+export function buildConnectionsCsv(connections, { oneByOneResults = {}, proxyPools = [] } = {}) {
+  const headers = [
+    "Index",
+    "Name",
+    "Email",
+    "Provider",
+    "Auth Type",
+    "Status",
+    "Active",
+    "Error Code",
+    "Last Error",
+    "Last Error Time",
+    "Proxy Pool",
+    "Proxy URL",
+    "Connection ID",
+    "Created At",
+  ];
+
+  const proxyMap = new Map((proxyPools || []).map((p) => [p.id, p.name || p.id]));
+
+  const rows = (connections || []).map((conn, idx) => {
+    const oneByOne = oneByOneResults?.[conn.id];
+    const statusLabel = getConnectionStatusLabel(conn, oneByOne);
+    const poolId = conn.providerSpecificData?.proxyPoolId;
+    const poolName = poolId ? (proxyMap.get(poolId) || poolId) : "";
+    const proxyUrl = conn.providerSpecificData?.connectionProxyUrl || "";
+    const lastErr = conn.lastError || oneByOne?.error || "";
+
+    return [
+      conn.priority != null ? conn.priority : idx + 1,
+      conn.displayName || conn.name || "",
+      conn.email || "",
+      conn.provider || "",
+      conn.authType || "",
+      statusLabel,
+      conn.isActive !== false ? "true" : "false",
+      conn.errorCode || conn.lastErrorCode || "",
+      lastErr,
+      conn.lastErrorAt || "",
+      poolName,
+      proxyUrl,
+      conn.id || "",
+      conn.createdAt || "",
+    ].map(escapeCsvField).join(",");
+  });
+
+  return [headers.join(","), ...rows].join("\r\n");
+}
+
+export function downloadCsvFile(csvContent, filename = "connections.csv") {
+  if (typeof window === "undefined") return;
+  const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+
 
