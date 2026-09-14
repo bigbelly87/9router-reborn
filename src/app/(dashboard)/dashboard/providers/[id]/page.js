@@ -23,7 +23,7 @@ import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
 import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
-import { isConnection4xx, isConnectionError, matchesConnectionStatusFilter } from "../utils.js";
+import { isConnection401, isConnection4xx, isConnectionError, matchesConnectionStatusFilter } from "../utils.js";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 
@@ -951,13 +951,16 @@ export default function ProviderDetailPage() {
   const statusCounts = useMemo(() => {
     let active = 0;
     let inactive = 0;
+    let error401 = 0;
     let error4xx = 0;
     let errorAll = 0;
     for (const c of connections) {
       if (c.isActive === false) inactive += 1;
+      const is401 = isConnection401(c, oneByOneResults[c.id]);
       const is4xx = isConnection4xx(c, oneByOneResults[c.id]);
       const isErr = isConnectionError(c, oneByOneResults[c.id]);
-      if (is4xx) error4xx += 1;
+      if (is401) error401 += 1;
+      if (is4xx && !is401) error4xx += 1;
       if (isErr) errorAll += 1;
       if (c.isActive !== false && !isErr) active += 1;
     }
@@ -965,6 +968,7 @@ export default function ProviderDetailPage() {
       all: connections.length,
       active,
       inactive,
+      error401,
       error4xx,
       errorAll,
     };
@@ -993,6 +997,7 @@ export default function ProviderDetailPage() {
       const statusStr = conn.isActive === false ? "disabled inactive" : "active enabled";
       const lastError = (conn.lastError || "").toLowerCase();
       const errorCodeStr = String(conn.errorCode || conn.lastErrorCode || "");
+      const is401 = isConnection401(conn, oneByOneResults[conn.id]);
       const is4xx = isConnection4xx(conn, oneByOneResults[conn.id]);
 
       return (
@@ -1008,6 +1013,7 @@ export default function ProviderDetailPage() {
         statusStr.includes(q) ||
         lastError.includes(q) ||
         errorCodeStr.includes(q) ||
+        (q === "401" && is401) ||
         (q === "4xx" && is4xx)
       );
     });
@@ -1804,6 +1810,7 @@ export default function ProviderDetailPage() {
                     >
                       <option value="all">All Status ({statusCounts.all})</option>
                       <option value="active">Active ({statusCounts.active})</option>
+                      <option value="401">🔑 Auth 401 ({statusCounts.error401})</option>
                       <option value="4xx">Status 4xx ({statusCounts.error4xx})</option>
                       <option value="error">All Errors ({statusCounts.errorAll})</option>
                       <option value="inactive">Disabled ({statusCounts.inactive})</option>
@@ -1816,7 +1823,7 @@ export default function ProviderDetailPage() {
                         type="text"
                         value={connectionSearchQuery}
                         onChange={(e) => setConnectionSearchQuery(e.target.value)}
-                        placeholder="Search accounts or 4xx..."
+                        placeholder="Search accounts, 401, 4xx..."
                         className="h-8 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
                       />
                       {connectionSearchQuery && (

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
 import { Card, Badge, Button, Modal, Select, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
-import { isConnection4xx, isConnectionError, matchesConnectionStatusFilter } from "../utils.js";
+import { isConnection401, isConnection4xx, isConnectionError, matchesConnectionStatusFilter } from "../utils.js";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -402,13 +402,16 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
   const statusCounts = useMemo(() => {
     let active = 0;
     let inactive = 0;
+    let error401 = 0;
     let error4xx = 0;
     let errorAll = 0;
     for (const c of connections) {
       if (c.isActive === false) inactive += 1;
+      const is401 = isConnection401(c);
       const is4xx = isConnection4xx(c);
       const isErr = isConnectionError(c);
-      if (is4xx) error4xx += 1;
+      if (is401) error401 += 1;
+      if (is4xx && !is401) error4xx += 1;
       if (isErr) errorAll += 1;
       if (c.isActive !== false && !isErr) active += 1;
     }
@@ -416,6 +419,7 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
       all: connections.length,
       active,
       inactive,
+      error401,
       error4xx,
       errorAll,
     };
@@ -444,6 +448,7 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
       const statusStr = conn.isActive === false ? "disabled inactive" : "active enabled";
       const lastError = (conn.lastError || "").toLowerCase();
       const errorCodeStr = String(conn.errorCode || conn.lastErrorCode || "");
+      const is401 = isConnection401(conn);
       const is4xx = isConnection4xx(conn);
 
       return (
@@ -459,6 +464,7 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
         statusStr.includes(q) ||
         lastError.includes(q) ||
         errorCodeStr.includes(q) ||
+        (q === "401" && is401) ||
         (q === "4xx" && is4xx)
       );
     });
@@ -517,6 +523,7 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
                 >
                   <option value="all">All Status ({statusCounts.all})</option>
                   <option value="active">Active ({statusCounts.active})</option>
+                  <option value="401">🔑 Auth 401 ({statusCounts.error401})</option>
                   <option value="4xx">Status 4xx ({statusCounts.error4xx})</option>
                   <option value="error">All Errors ({statusCounts.errorAll})</option>
                   <option value="inactive">Disabled ({statusCounts.inactive})</option>
@@ -529,7 +536,7 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
                     type="text"
                     value={connectionSearchQuery}
                     onChange={(e) => setConnectionSearchQuery(e.target.value)}
-                    placeholder="Search accounts or 4xx..."
+                    placeholder="Search accounts, 401, 4xx..."
                     className="h-8 w-full rounded-lg border border-border bg-surface pl-8 pr-7 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
                   />
                   {connectionSearchQuery && (
