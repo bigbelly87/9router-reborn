@@ -65,7 +65,7 @@ describe("Custom Date-Time Range Usage & Consistency Tests", () => {
     // API Key entries should contain masked keys
     const apiKeyEntries = Object.values(stats.byApiKey);
     expect(apiKeyEntries.length).toBeGreaterThanOrEqual(1);
-    expect(apiKeyEntries[0].apiKeyMasked).toBe("sk-12345***");
+    expect(apiKeyEntries[0].apiKeyMasked).toBe("sk-12345***cdef");
   });
 
   it("should generate 5-minute buckets for short custom ranges under 3 hours in getChartData", async () => {
@@ -82,6 +82,7 @@ describe("Custom Date-Time Range Usage & Consistency Tests", () => {
     expect(buckets[0]).toHaveProperty("label");
     expect(buckets[0]).toHaveProperty("tokens");
     expect(buckets[0]).toHaveProperty("cost");
+    expect(buckets[0]).toHaveProperty("requests");
   });
 
   it("should generate hourly buckets for custom ranges under 48 hours in getChartData", async () => {

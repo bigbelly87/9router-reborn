@@ -56,6 +56,16 @@ describe("Telegram Alert Service", () => {
       };
       expect(extractRemainingPercentage(quotaData)).toBe(20);
     });
+
+    it("inverts percentage when percentageIsUsed is true in nested quotas", () => {
+      const quotaData = {
+        quotas: {
+          session: { percentage: 25, percentageIsUsed: true },
+          weekly: { percentage: 85, percentageIsUsed: true },
+        },
+      };
+      expect(extractRemainingPercentage(quotaData)).toBe(15);
+    });
   });
 
   describe("checkAndAlertStatusTransition", () => {
