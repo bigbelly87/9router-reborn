@@ -10,6 +10,7 @@ const PRESETS = [
   { value: "7d", label: "7D" },
   { value: "30d", label: "30D" },
   { value: "60d", label: "60D" },
+  { value: "all", label: "All" },
 ];
 
 function formatToLocalDatetime(isoOrDate) {
@@ -218,7 +219,7 @@ export default function TimeRangeSelector({
     <div className="flex flex-col gap-2.5 sm:self-end" ref={customRef}>
       {/* Presets Bar + Custom Trigger */}
       <div className="flex flex-wrap items-center justify-end gap-1.5">
-        <div className="grid flex-1 grid-cols-5 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
+        <div className="grid flex-1 grid-cols-6 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
           {PRESETS.map((p) => {
             const active = period === p.value;
             return (

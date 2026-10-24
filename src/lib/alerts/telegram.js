@@ -114,7 +114,11 @@ export async function sendTelegramMessage(htmlText, options = {}) {
  */
 export function extractRemainingPercentage(quotaData) {
   if (!quotaData) return null;
-  if (typeof quotaData.percentage === "number") return quotaData.percentage;
+  if (typeof quotaData.percentage === "number") {
+    return quotaData.percentageIsUsed === true
+      ? Math.max(0, Math.round(100 - quotaData.percentage))
+      : quotaData.percentage;
+  }
   if (typeof quotaData.remainingPercentage === "number") return quotaData.remainingPercentage;
 
   // If quotas object with multiple limits exists (e.g. session, weekly, daily)
@@ -127,7 +131,9 @@ export function extractRemainingPercentage(quotaData) {
       if (typeof q.remainingPercentage === "number") {
         pct = q.remainingPercentage;
       } else if (typeof q.percentage === "number") {
-        pct = q.percentage;
+        pct = q.percentageIsUsed === true
+          ? Math.max(0, Math.round(100 - q.percentage))
+          : q.percentage;
       } else if (typeof q.used === "number" && typeof q.total === "number" && q.total > 0) {
         pct = Math.max(0, Math.round(((q.total - q.used) / q.total) * 100));
       } else if (typeof q.remaining === "number" && typeof q.total === "number" && q.total > 0) {

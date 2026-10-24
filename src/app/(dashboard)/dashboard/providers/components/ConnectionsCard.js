@@ -5,6 +5,7 @@ import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/c
 import PropTypes from "prop-types";
 import { Card, Badge, Button, Modal, Select, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
 import { isConnection401, isConnection4xx, isConnectionError, matchesConnectionStatusFilter, buildConnectionsCsv, downloadCsvFile } from "../utils.js";
+import WebLoginButton from "./WebLoginButton";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -296,7 +297,7 @@ AddApiKeyModal.propTypes = {
 
 // ── ConnectionsCard ────────────────────────────────────────────
 // Self-contained card: fetches, displays and manages all connections for a provider.
-export default function ConnectionsCard({ providerId, isOAuth }) {
+export default function ConnectionsCard({ providerId, isOAuth, loginProviderId = null }) {
   const [connections, setConnections] = useState([]);
   const [connectionSearchQuery, setConnectionSearchQuery] = useState("");
   const [connectionStatusFilter, setConnectionStatusFilter] = useState("all");
@@ -514,7 +515,12 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
         {connections.length === 0 ? (
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-text-muted">No connections yet</p>
-            <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>Add Connection</Button>
+            <div className="flex flex-wrap gap-2">
+              {loginProviderId && (
+                <WebLoginButton providerId={loginProviderId} onConnected={fetch_} />
+              )}
+              <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>Add Connection</Button>
+            </div>
           </div>
         ) : (
           <>
@@ -591,7 +597,6 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
                 </div>
               </div>
             ) : (
-
               <div className="flex flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
                 {filteredConnections.map((conn) => {
                   const idx = connections.findIndex((c) => c.id === conn.id);
@@ -614,8 +619,11 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
                 })}
               </div>
             )}
-            <div className="mt-4 flex justify-stretch sm:justify-start">
+            <div className="mt-4 flex justify-stretch gap-2 sm:justify-start">
               <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>Add</Button>
+              {loginProviderId && (
+                <WebLoginButton providerId={loginProviderId} onConnected={fetch_} />
+              )}
             </div>
           </>
         )}
@@ -652,4 +660,5 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
 ConnectionsCard.propTypes = {
   providerId: PropTypes.string.isRequired,
   isOAuth: PropTypes.bool,
+  loginProviderId: PropTypes.string,
 };
